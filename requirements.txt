@@ -1,0 +1,4 @@
+streamlit
+notion-client
+beautifulsoup4
+requests
