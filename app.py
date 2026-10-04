@@ -5,8 +5,6 @@ import zipfile
 from bs4 import BeautifulSoup
 from notion_client import Client
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 import streamlit as st
 
 # ==========================================
@@ -17,24 +15,6 @@ DATABASE_ID = st.secrets["DATABASE_ID"]
 DART_API_KEY = st.secrets["DART_API_KEY"]
 
 notion = Client(auth=NOTION_TOKEN)
-
-
-def get_session():
-  s = requests.Session()
-  retries = Retry(
-      total=3,
-      backoff_factor=1,
-      status_forcelist=[500, 502, 503, 504],
-  )
-  s.mount("https://", HTTPAdapter(max_retries=retries))
-  s.headers.update({
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
-          " like Gecko) Chrome/128.0.0.0 Safari/537.36"
-      ),
-      "Accept": "application/json, text/html, */*",
-  })
-  return s
 
 
 # ==========================================
@@ -48,21 +28,26 @@ def get_previous_business_day(target_date: date) -> date:
 
 
 # ==========================================
-# 3. OpenDART API 유상증자 정밀 조회
+# 3. [1단계] 공시 목록 초경량 수신 (제목/종목명만)
 # ==========================================
-def fetch_rights_offering_disclosures(target_date: date):
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_disclosure_list(target_date: date):
   bgn_de = target_date.strftime("%Y%m%d")
   url = "https://opendart.fss.or.kr/api/list.json"
   params = {
       "crtfc_key": DART_API_KEY,
       "bgn_de": bgn_de,
       "end_de": bgn_de,
-      "pblntf_detail_ty": "B001",  # 주요사항보고서 정밀 타겟팅
-      "page_count": 100,
+      "pblntf_detail_ty": "B001",  # 주요사항보고서
+      "page_count": 40,
   }
 
-  session = get_session()
-  res = session.get(url, params=params, timeout=20)
+  headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Accept": "application/json",
+  }
+
+  res = requests.get(url, params=params, headers=headers, timeout=10)
   res.raise_for_status()
   data = res.json()
 
@@ -70,7 +55,7 @@ def fetch_rights_offering_disclosures(target_date: date):
     return []
 
   if data.get("status") != "000":
-    raise Exception(f"DART API 응답 에러: {data.get('message')}")
+    raise Exception(f"DART API 응답 오류: {data.get('message')}")
 
   items = []
   for item in data.get("list", []):
@@ -86,12 +71,15 @@ def fetch_rights_offering_disclosures(target_date: date):
   return items
 
 
+# ==========================================
+# 4. [2단계] 선택된 종목만 본문 다운로드 및 일정 추출
+# ==========================================
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_disclosure_text(rcept_no: str) -> str:
   api_url = "https://opendart.fss.or.kr/api/document.xml"
   params = {"crtfc_key": DART_API_KEY, "rcept_no": rcept_no}
 
-  session = get_session()
-  res = session.get(api_url, params=params, timeout=25)
+  res = requests.get(api_url, params=params, timeout=15)
   res.raise_for_status()
 
   full_text = ""
@@ -111,7 +99,7 @@ def get_disclosure_text(rcept_no: str) -> str:
   return full_text
 
 
-def parse_offering_schedule(text: str, default_corp: str):
+def parse_offering_schedule(text: str, corp_name: str):
   def find_date(keywords):
     for kw in keywords:
       pattern = rf"{kw}[^\d]{{0,35}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
@@ -130,7 +118,7 @@ def parse_offering_schedule(text: str, default_corp: str):
     return None
 
   return {
-      "corp_name": default_corp,
+      "corp_name": corp_name,
       "record_date": find_date(["신주배정기준일", "배정기준일"]),
       "sub_start": find_date(
           ["청약예정일", "구주주청약", "청약기간", "청약일"]
@@ -140,7 +128,7 @@ def parse_offering_schedule(text: str, default_corp: str):
 
 
 # ==========================================
-# 4. 노션 등록 함수
+# 5. 노션 데이터베이스 등록
 # ==========================================
 def create_notion_task(title: str, event_date: str, note: str):
   notion.pages.create(
@@ -157,7 +145,7 @@ def create_notion_task(title: str, event_date: str, note: str):
 
 
 # ==========================================
-# 5. 메인 UI
+# 6. Streamlit UI
 # ==========================================
 st.set_page_config(
     page_title="[국내공시] 유상증자 등록", page_icon="📊", layout="centered"
@@ -181,87 +169,100 @@ with col2:
   st.write("")
   search_btn = st.button("🔍 목록 조회", type="secondary")
 
+# 세션 상태 초기화
 if "disclosures" not in st.session_state:
   st.session_state.disclosures = []
+if "searched" not in st.session_state:
+  st.session_state.searched = False
 
+# [1단계] 목록 조회 실행 (초경량)
 if search_btn:
-  with st.spinner(f"{selected_date.strftime('%Y-%m-%d')} 공시 목록 수신 중..."):
+  st.session_state.searched = True
+  with st.spinner(f"{selected_date.strftime('%Y-%m-%d')} 유상증자 종목 조회 중..."):
     try:
-      items = fetch_rights_offering_disclosures(selected_date)
+      items = fetch_disclosure_list(selected_date)
       st.session_state.disclosures = items
-      if not items:
-        st.info(
-            f"{selected_date.strftime('%Y-%m-%d')}에 접수된 유상증자 결정"
-            " 공시가 없습니다."
-        )
     except Exception as e:
+      st.session_state.disclosures = []
       st.error(f"공시 목록 조회 실패: {e}")
 
-if st.session_state.disclosures:
+# 조회 결과 영역
+if st.session_state.searched:
   disclosures = st.session_state.disclosures
-  st.write(f"📋 **확인된 유상증자 공시 {len(disclosures)}건:**")
+  if not disclosures:
+    st.info(
+        f"📅 {selected_date.strftime('%Y-%m-%d')}에 접수된 유상증자 공시가"
+        " 없습니다."
+    )
+  else:
+    st.write(f"📋 **확인된 유상증자 종목 {len(disclosures)}건**")
 
-  options = {
-      f"[{item['corp_name']}] ({item['stock_code']}) - {item['report_nm']}": (
-          item
-      )
-      for item in disclosures
-  }
+    options = {
+        f"[{item['corp_name']}] ({item['stock_code']}) - {item['report_nm']}": (
+            item
+        )
+        for item in disclosures
+    }
 
-  selected_labels = st.multiselect(
-      "보유 종목 선택",
-      options=list(options.keys()),
-      placeholder="등록할 보유 종목을 선택하세요...",
-  )
+    selected_labels = st.multiselect(
+        "보유 종목 선택",
+        options=list(options.keys()),
+        placeholder="등록할 종목을 선택하세요...",
+    )
 
-  if st.button("🚀 선택 종목 노션 TO DO LIST에 일괄 등록", type="primary"):
-    if not selected_labels:
-      st.warning("종목을 1개 이상 선택해 주세요.")
-    else:
-      with st.spinner("일정 파싱 및 노션 등록 중..."):
-        total_registered = 0
-        for label in selected_labels:
-          target_item = options[label]
-          corp = target_item["corp_name"]
-          rcept_no = target_item["rcept_no"]
+    # [2단계] 선택된 종목만 본문 파싱 및 노션 전송
+    if st.button("🚀 선택 종목 상세 분석 및 노션 등록", type="primary"):
+      if not selected_labels:
+        st.warning("등록할 종목을 1개 이상 선택해 주세요.")
+      else:
+        with st.spinner("선택 종목 공시 원문 파싱 및 노션 일정 등록 중..."):
+          total_registered = 0
+          for label in selected_labels:
+            target_item = options[label]
+            corp = target_item["corp_name"]
+            rcept_no = target_item["rcept_no"]
 
-          try:
-            raw_text = get_disclosure_text(rcept_no)
-            sched = parse_offering_schedule(raw_text, corp)
+            try:
+              raw_text = get_disclosure_text(rcept_no)
+              sched = parse_offering_schedule(raw_text, corp)
 
-            sub_count = 0
-            if sched["record_date"]:
-              create_notion_task(
-                  f"[{corp}] 유상증자 신주배정기준일",
-                  sched["record_date"],
-                  f"권리락/배정 기준일 확인 ({target_item['report_nm']})",
-              )
-              sub_count += 1
-            if sched["sub_start"]:
-              create_notion_task(
-                  f"[{corp}] 유상증자 청약 개시",
-                  sched["sub_start"],
-                  f"청약 신청 진행 및 자금 확인 ({target_item['report_nm']})",
-              )
-              sub_count += 1
-            if sched["pay_date"]:
-              create_notion_task(
-                  f"[{corp}] 유상증자 주금 납입일",
-                  sched["pay_date"],
-                  f"주금 납입 및 회계처리 확인 ({target_item['report_nm']})",
-              )
-              sub_count += 1
+              sub_count = 0
+              if sched["record_date"]:
+                create_notion_task(
+                    f"[{corp}] 유상증자 신주배정기준일",
+                    sched["record_date"],
+                    f"권리락/배정 기준일 확인 ({target_item['report_nm']})",
+                )
+                sub_count += 1
+              if sched["sub_start"]:
+                create_notion_task(
+                    f"[{corp}] 유상증자 청약 개시",
+                    sched["sub_start"],
+                    f"청약 신청 진행 및 자금 확인 ({target_item['report_nm']})",
+                )
+                sub_count += 1
+              if sched["pay_date"]:
+                create_notion_task(
+                    f"[{corp}] 유상증자 주금 납입일",
+                    sched["pay_date"],
+                    f"주금 납입 및 회계처리 확인 ({target_item['report_nm']})",
+                )
+                sub_count += 1
 
-            if sub_count > 0:
-              st.success(
-                  f"✅ [{corp}] 등록 완료 (기준일:"
-                  f" {sched['record_date'] or '-'} / 청약:"
-                  f" {sched['sub_start'] or '-'} / 납입:"
-                  f" {sched['pay_date'] or '-'})"
-              )
-              total_registered += 1
-          except Exception as e:
-            st.error(f"❌ [{corp}] 등록 오류: {e}")
+              if sub_count > 0:
+                st.success(
+                    f"✅ [{corp}] 등록 완료 (기준일:"
+                    f" {sched['record_date'] or '-'} / 청약:"
+                    f" {sched['sub_start'] or '-'} / 납입:"
+                    f" {sched['pay_date'] or '-'})"
+                )
+                total_registered += 1
+              else:
+                st.warning(
+                    f"⚠️ [{corp}] 본문에서 일정을 추출하지 못했습니다."
+                )
+            except Exception as e:
+              st.error(f"❌ [{corp}] 처리 중 에러: {e}")
 
-        if total_registered > 0:
-          st.balloons()
+          if total_registered > 0:
+            st.balloons()
