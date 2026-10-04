@@ -22,7 +22,7 @@ HEADERS = {
 
 
 # ==========================================
-# 2. 최근 30건 중 '유상증자' 공시만 필터링 수신
+# 2. 최근 30건 중 '유상증자' 공시 수신 & 제목 정제
 # ==========================================
 def fetch_naver_notices(stock_code: str):
   """네이버 증권 API로부터 최근 30건 중 유상증자 공시만 추출"""
@@ -51,7 +51,7 @@ def fetch_naver_notices(stock_code: str):
       continue
 
     notice_no = item.get("no", "")
-    raw_datetime = item.get("datetime", "")  # "2026-10-02T14:09:00"
+    raw_datetime = item.get("datetime", "")
     html_contents = item.get("contents", "")
 
     # 날짜 포맷팅 (YYYY.MM.DD)
@@ -60,14 +60,8 @@ def fetch_naver_notices(stock_code: str):
       date_part = raw_datetime.split("T")[0]
       date_str = date_part.replace("-", ".")
 
-    # 가독성을 위해 긴 풀네임에서 핵심 공시명 위주로 깔끔하게 정제
-    clean_title = title
-    for drop_word in ["위탁관리부동산투자회사", "주식회사", "기타"]:
-      clean_title = clean_title.replace(drop_word, "").strip()
-
     filtered_list.append({
-        "title": clean_title,
-        "full_title": title,
+        "title": title,
         "no": str(notice_no),
         "date": date_str,
         "contents": html_contents,
@@ -131,7 +125,7 @@ def create_notion_task(title: str, event_date: str, note: str):
 
 
 # ==========================================
-# 5. Streamlit 메인 UI (컴팩트 중앙 정렬)
+# 5. Streamlit 메인 UI
 # ==========================================
 st.set_page_config(
     page_title="[국내공시] 유상증자 등록",
@@ -139,17 +133,45 @@ st.set_page_config(
     layout="centered"
 )
 
+# 최대 제목 길이에 따라 컨테이너 폭을 동적으로 맞추는 CSS
+max_len = 0
+if st.session_state.get("found_notices"):
+  titles = [n.get("title", "") for n in st.session_state["found_notices"]]
+  if titles:
+    max_len = max(len(t) for t in titles)
+
+# 기본 750px ~ 가장 긴 제목에 맞춰 최대 1050px까지 유동적으로 확장
+calc_width = min(max(750, max_len * 18 + 180), 1050)
+
+st.markdown(
+    f"""
+    <style>
+    .block-container {{
+        max-width: {calc_width}px !important;
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }}
+    .notice-item {{
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("📊 [국내공시] 유상증자 등록")
 st.caption("종목코드를 입력하면 최근 유상증자 공시 일정을 찾아 노션에 등록합니다.")
 
-col1, col2 = st.columns([3, 1])
-with col1:
+# 종목코드 입력창
+col_in1, col_in2 = st.columns([4, 1.2])
+with col_in1:
   stock_code = st.text_input(
       "종목코드 입력",
       placeholder="예: 448730",
       label_visibility="collapsed"
   ).strip()
-with col2:
+with col_in2:
   search_btn = st.button("🔍 공시 조회", type="primary", use_container_width=True)
 
 if search_btn:
@@ -161,6 +183,7 @@ if search_btn:
         items = fetch_naver_notices(stock_code)
         st.session_state["found_notices"] = items
         st.session_state["current_code"] = stock_code
+        st.rerun()
       except Exception as e:
         st.error(f"공시 목록 조회 실패: {e}")
 
@@ -172,12 +195,16 @@ if st.session_state.get("found_notices"):
   st.markdown(f"**📋 발견된 유상증자 공시 {len(notices)}건**")
 
   for idx, notice in enumerate(notices):
-    # 공시명과 버튼이 한눈에 들어오도록 4:1 밀착 배치
-    col_a, col_b = st.columns([4, 1.2])
+    col_a, col_b = st.columns([5, 1.2])
     with col_a:
-      date_str = f" `{notice.get('date', '')}`" if notice.get("date") else ""
-      st.markdown(f"**{notice.get('title', '')}**{date_str}")
+      # 💡 1행: 공시 제목
+      st.markdown(f"**{notice.get('title', '')}**")
+      # 💡 2행: 날짜는 무조건 다음 줄에 배치
+      date_val = notice.get("date", "")
+      date_display = f"📅 공시일자: `{date_val}`" if date_val else "📅 공시일자: -"
+      st.caption(date_display)
     with col_b:
+      st.write("")  # 수직 위치 밸런스 조정
       if st.button("🚀 일정등록", key=f"btn_{idx}", use_container_width=True):
         with st.spinner("일정 분석 및 등록 중..."):
           try:
@@ -188,7 +215,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 신주배정기준일",
                   sched["record_date"],
-                  f"신주배정기준일 ({notice.get('full_title', '')})",
+                  f"신주배정기준일 ({notice.get('title', '')})",
               )
               registered.append(f"기준일: {sched['record_date']}")
 
@@ -196,7 +223,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 청약 개시",
                   sched["sub_start"],
-                  f"청약개시일 ({notice.get('full_title', '')})",
+                  f"청약개시일 ({notice.get('title', '')})",
               )
               registered.append(f"청약일: {sched['sub_start']}")
 
@@ -204,7 +231,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 주금 납입일",
                   sched["pay_date"],
-                  f"주금납입일 ({notice.get('full_title', '')})",
+                  f"주금납입일 ({notice.get('title', '')})",
               )
               registered.append(f"납입일: {sched['pay_date']}")
 
