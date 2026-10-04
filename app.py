@@ -5,10 +5,13 @@ import requests
 import streamlit as st
 
 # ==========================================
-# 1. 노션 설정 로드 (Streamlit Secrets)
+# 1. 노션 설정 로드 (Streamlit Secrets & 상수)
 # ==========================================
 NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
 DATABASE_ID = st.secrets["DATABASE_ID"]
+
+# 💡 복사해주신 '📢 국내공시' 노션 페이지 ID
+CATEGORY_RELATION_ID = "ab0b581c7f5d8326a7f2812fe3dd5fa6"
 
 notion = Client(auth=NOTION_TOKEN)
 
@@ -108,14 +111,17 @@ def parse_offering_schedule_from_contents(html_content: str):
 
 
 # ==========================================
-# 4. 노션 데이터베이스 등록 함수
+# 4. 노션 데이터베이스 등록 함수 (Relation 속성 연동)
 # ==========================================
 def create_notion_task(title: str, event_date: str, note: str):
   notion.pages.create(
       parent={"database_id": DATABASE_ID},
       properties={
           "이름": {"title": [{"text": {"content": title}}]},
-          "category": {"select": {"name": "📊 유상증자 / 무상증자"}},
+          # 💡 Relation 형식으로 '📢 국내공시' 연결
+          "category": {
+              "relation": [{"id": CATEGORY_RELATION_ID}]
+          },
           "구분": {"select": {"name": "공시"}},
           "일정": {"date": {"start": event_date}},
           "완료": {"checkbox": False},
@@ -133,7 +139,7 @@ st.set_page_config(
     layout="centered"
 )
 
-# 최대 제목 길이에 맞춰 컨테이너 폭 자동 조절 & 공시 간격 여백 스타일링
+# 최대 제목 길이에 맞춰 컨테이너 폭 자동 조절 & 여백 스타일링
 max_len = 0
 if st.session_state.get("found_notices"):
   titles = [n.get("title", "") for n in st.session_state["found_notices"]]
@@ -197,16 +203,16 @@ if st.session_state.get("found_notices"):
   for idx, notice in enumerate(notices):
     col_a, col_b = st.columns([5, 1.2])
     with col_a:
-      # 💡 1행: 공시일자를 상단에 작고 깔끔하게 배치
+      # 1행: 공시일자
       date_val = notice.get("date", "")
       date_display = f"📅 `{date_val}`" if date_val else "📅 `일자 미정`"
       st.caption(date_display)
       
-      # 💡 2행: 바로 다음 줄에 공시 제목 배치
+      # 2행: 공시 제목
       st.markdown(f"**{notice.get('title', '')}**")
       
     with col_b:
-      st.write("")  # 수직 위치 밸런스 조정
+      st.write("")
       if st.button("🚀 일정등록", key=f"btn_{idx}", use_container_width=True):
         with st.spinner("일정 분석 및 등록 중..."):
           try:
@@ -249,7 +255,6 @@ if st.session_state.get("found_notices"):
           except Exception as e:
             st.error(f"등록 실패: {e}")
 
-    # 💡 공시 카드 간 미세 간격 분리선
     st.markdown('<div class="notice-item-divider"></div>', unsafe_allow_html=True)
 
 elif st.session_state.get("current_code") and not st.session_state.get(
