@@ -124,13 +124,13 @@ st.set_page_config(
 )
 st.title("📊 [국내공시] 유상증자 등록")
 st.write(
-    "KIND/DART 공시 상세 페이지 URL 또는 접수번호(14자리)를 넣으면 핵심 일정을 노션"
-    " TO DO LIST에 자동 등록합니다."
+    "DART 공시 상세 페이지 URL 입력 후 유상증자 일정을 노션 TO DO LIST에 자동"
+    " 등록합니다"
 )
 
 input_val = st.text_input(
-    "공시 URL 또는 접수번호 입력",
-    placeholder="https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno=20260921000145...",
+    "DART 공시 URL 입력",
+    placeholder="",
 )
 
 if st.button("🚀 노션 TO DO LIST에 등록하기", type="primary"):
