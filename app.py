@@ -1,4 +1,3 @@
-import io
 import re
 from bs4 import BeautifulSoup
 from notion_client import Client
@@ -23,10 +22,10 @@ HEADERS = {
 
 
 # ==========================================
-# 2. 최근 30건 전체 공시 목록 조회
+# 2. 최근 30건 전체 공시 및 본문 수신
 # ==========================================
 def fetch_naver_notices(stock_code: str):
-  """종목코드(6자리) 기준 최근 30건 전체 공시 조회"""
+  """네이버 증권 API로부터 최근 30건 공시와 본문(contents)을 한 번에 수신"""
   url = f"https://stock.naver.com/api/domestic/detail/notice?itemCode={stock_code}&startIdx=0&pageSize=30"
   res = requests.get(url, headers=HEADERS, timeout=10)
   res.raise_for_status()
@@ -36,32 +35,31 @@ def fetch_naver_notices(stock_code: str):
   if isinstance(data, list):
     notices = data
   elif isinstance(data, dict):
-    notices = data.get("notices") or data.get("list") or data.get("result") or []
+    notices = (
+        data.get("notices")
+        or data.get("list")
+        or data.get("result")
+        or []
+    )
 
   result_list = []
   for item in notices:
     title = item.get("title", "")
-    notice_id = (
-        item.get("noticeId")
-        or item.get("articleId")
-        or item.get("id")
-        or item.get("rcpNo")
-    )
+    notice_no = item.get("no", "")
+    raw_datetime = item.get("datetime", "")  # "2026-10-02T14:09:00"
+    html_contents = item.get("contents", "")
 
-    notice_date = (
-        item.get("submitDate")
-        or item.get("dt")
-        or item.get("rceptDt")
-        or item.get("date")
-        or ""
-    )
-    if len(notice_date) == 8 and notice_date.isdigit():
-      notice_date = f"{notice_date[:4]}.{notice_date[4:6]}.{notice_date[6:]}"
+    # 날짜 포맷팅 (YYYY-MM-DD -> YYYY.MM.DD)
+    date_str = ""
+    if raw_datetime:
+      date_part = raw_datetime.split("T")[0]
+      date_str = date_part.replace("-", ".")
 
     result_list.append({
         "title": title,
-        "notice_id": str(notice_id),
-        "date": notice_date,
+        "no": str(notice_no),
+        "date": date_str,
+        "contents": html_contents,
         "is_offering": "유상증자" in title,
     })
 
@@ -69,21 +67,20 @@ def fetch_naver_notices(stock_code: str):
 
 
 # ==========================================
-# 3. 공시 본문 수신 및 핵심 일정 파싱
+# 3. 공시 본문(contents)에서 3대 핵심 일정 파싱
 # ==========================================
-def parse_offering_schedule(stock_code: str, notice_id: str):
-  detail_url = (
-      f"https://stock.naver.com/domestic/stock/{stock_code}/notice/{notice_id}"
-  )
-  res = requests.get(detail_url, headers=HEADERS, timeout=10)
-  res.raise_for_status()
+def parse_offering_schedule_from_contents(html_content: str):
+  """contents 내부 HTML에서 신주배정기준일, 청약일, 납입일 추출"""
+  if not html_content:
+    return {"record_date": None, "sub_start": None, "pay_date": None}
 
-  soup = BeautifulSoup(res.text, "html.parser")
+  soup = BeautifulSoup(html_content, "html.parser")
   text = soup.get_text()
 
   def find_date(keywords):
     for kw in keywords:
-      pattern = rf"{kw}[^\d]{{0,35}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
+      # 키워드 뒤 50자 이내에 등장하는 YYYY.MM.DD 또는 YYYY년 MM월 DD일 매칭
+      pattern = rf"{kw}[^\d]{{0,50}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
       m = re.search(pattern, text)
       if m:
         raw = m.group(1)
@@ -101,9 +98,9 @@ def parse_offering_schedule(stock_code: str, notice_id: str):
   return {
       "record_date": find_date(["신주배정기준일", "배정기준일"]),
       "sub_start": find_date(
-          ["청약예정일", "구주주청약", "청약기간", "청약일"]
+          ["구주주청약일", "구주주청약", "청약예정일", "청약일", "청약기간"]
       ),
-      "pay_date": find_date(["납입일", "주금납입일"]),
+      "pay_date": find_date(["주금납입일", "납입일"]),
   }
 
 
@@ -163,20 +160,19 @@ if st.session_state.get("found_notices"):
   notices = st.session_state["found_notices"]
   current_code = st.session_state.get("current_code", "")
 
-  st.write(f"📋 **최근 30건 공시 목록:**")
+  st.write("📋 **최근 30건 공시 목록:**")
 
   for idx, notice in enumerate(notices):
     col_a, col_b = st.columns([3.5, 1.2])
     with col_a:
       date_str = f" ({notice.get('date', '')})" if notice.get("date") else ""
-      is_offering = notice.get("is_offering", "유상증자" in notice.get("title", ""))
-      prefix = "📌 " if is_offering else ""
+      prefix = "📌 " if notice.get("is_offering") else ""
       st.markdown(f"{prefix}**{notice.get('title', '')}**{date_str}")
     with col_b:
       if st.button("🚀 일정등록", key=f"btn_{idx}"):
         with st.spinner("본문 일정 분석 및 노션 등록 중..."):
           try:
-            sched = parse_offering_schedule(current_code, notice.get("notice_id", ""))
+            sched = parse_offering_schedule_from_contents(notice.get("contents", ""))
             registered = []
 
             if sched["record_date"]:
@@ -210,8 +206,8 @@ if st.session_state.get("found_notices"):
               st.balloons()
             else:
               st.warning(
-                  "공시 본문에서 핵심 일정을 찾지 못했습니다. 유상증자"
-                  " 본문인지 확인해 주세요."
+                  "공시 본문에서 핵심 일정을 찾지 못했습니다. 유상증자 본문인지"
+                  " 확인해 주세요."
               )
           except Exception as e:
             st.error(f"등록 실패: {e}")
