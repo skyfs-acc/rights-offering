@@ -60,8 +60,14 @@ def fetch_naver_notices(stock_code: str):
       date_part = raw_datetime.split("T")[0]
       date_str = date_part.replace("-", ".")
 
+    # 가독성을 위해 긴 풀네임에서 핵심 공시명 위주로 깔끔하게 정제
+    clean_title = title
+    for drop_word in ["위탁관리부동산투자회사", "주식회사", "기타"]:
+      clean_title = clean_title.replace(drop_word, "").strip()
+
     filtered_list.append({
-        "title": title,
+        "title": clean_title,
+        "full_title": title,
         "no": str(notice_no),
         "date": date_str,
         "contents": html_contents,
@@ -83,7 +89,6 @@ def parse_offering_schedule_from_contents(html_content: str):
 
   def find_date(keywords):
     for kw in keywords:
-      # 키워드 뒤 50자 이내에 등장하는 YYYY.MM.DD 또는 YYYY년 MM월 DD일 매칭
       pattern = rf"{kw}[^\d]{{0,50}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
       m = re.search(pattern, text)
       if m:
@@ -126,31 +131,26 @@ def create_notion_task(title: str, event_date: str, note: str):
 
 
 # ==========================================
-# 5. Streamlit 메인 UI (wide 모드 적용)
+# 5. Streamlit 메인 UI (컴팩트 중앙 정렬)
 # ==========================================
 st.set_page_config(
     page_title="[국내공시] 유상증자 등록",
     page_icon="📊",
-    layout="wide"  # 💡 가로폭 전체 확장
+    layout="centered"
 )
 
 st.title("📊 [국내공시] 유상증자 등록")
-st.write(
-    "종목코드(6자리)를 입력하면 최근 유상증자 공시만 선별하여 노션에 일정을"
-    " 등록합니다."
-)
+st.caption("종목코드를 입력하면 최근 유상증자 공시 일정을 찾아 노션에 등록합니다.")
 
-# 입력창 영역 (상단도 넉넉하게 배치)
-col_in1, col_in2, _ = st.columns([4, 1.2, 5])
-with col_in1:
+col1, col2 = st.columns([3, 1])
+with col1:
   stock_code = st.text_input(
-      "종목코드 입력 (예: 448730)",
-      placeholder="6자리 종목코드 입력",
+      "종목코드 입력",
+      placeholder="예: 448730",
+      label_visibility="collapsed"
   ).strip()
-with col_in2:
-  st.write("")
-  st.write("")
-  search_btn = st.button("🔍 공시 조회", type="primary")
+with col2:
+  search_btn = st.button("🔍 공시 조회", type="primary", use_container_width=True)
 
 if search_btn:
   if not stock_code:
@@ -169,17 +169,17 @@ if st.session_state.get("found_notices"):
   current_code = st.session_state.get("current_code", "")
 
   st.write("")
-  st.markdown(f"#### 📋 발견된 유상증자 공시 {len(notices)}건")
+  st.markdown(f"**📋 발견된 유상증자 공시 {len(notices)}건**")
 
   for idx, notice in enumerate(notices):
-    # 공시명에 가로 폭을 대폭 할당 (8: 1.2)
-    col_a, col_b = st.columns([8, 1.2])
+    # 공시명과 버튼이 한눈에 들어오도록 4:1 밀착 배치
+    col_a, col_b = st.columns([4, 1.2])
     with col_a:
-      date_str = f" ({notice.get('date', '')})" if notice.get("date") else ""
+      date_str = f" `{notice.get('date', '')}`" if notice.get("date") else ""
       st.markdown(f"**{notice.get('title', '')}**{date_str}")
     with col_b:
-      if st.button("🚀 일정등록", key=f"btn_{idx}"):
-        with st.spinner("본문 일정 분석 및 노션 등록 중..."):
+      if st.button("🚀 일정등록", key=f"btn_{idx}", use_container_width=True):
+        with st.spinner("일정 분석 및 등록 중..."):
           try:
             sched = parse_offering_schedule_from_contents(notice.get("contents", ""))
             registered = []
@@ -188,7 +188,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 신주배정기준일",
                   sched["record_date"],
-                  f"신주배정기준일 ({notice.get('title', '')})",
+                  f"신주배정기준일 ({notice.get('full_title', '')})",
               )
               registered.append(f"기준일: {sched['record_date']}")
 
@@ -196,7 +196,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 청약 개시",
                   sched["sub_start"],
-                  f"청약개시일 ({notice.get('title', '')})",
+                  f"청약개시일 ({notice.get('full_title', '')})",
               )
               registered.append(f"청약일: {sched['sub_start']}")
 
@@ -204,7 +204,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 주금 납입일",
                   sched["pay_date"],
-                  f"주금납입일 ({notice.get('title', '')})",
+                  f"주금납입일 ({notice.get('full_title', '')})",
               )
               registered.append(f"납입일: {sched['pay_date']}")
 
@@ -215,8 +215,7 @@ if st.session_state.get("found_notices"):
               st.balloons()
             else:
               st.warning(
-                  "공시 본문에서 핵심 일정을 찾지 못했습니다. 유상증자 본문인지"
-                  " 확인해 주세요."
+                  "공시 본문에서 핵심 일정을 찾지 못했습니다. 본문 세부 내용을 확인해 주세요."
               )
           except Exception as e:
             st.error(f"등록 실패: {e}")
