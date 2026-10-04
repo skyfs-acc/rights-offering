@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 import io
 import re
+from urllib.parse import quote
 import zipfile
 from bs4 import BeautifulSoup
 from notion_client import Client
@@ -28,7 +29,54 @@ def get_previous_business_day(target_date: date) -> date:
 
 
 # ==========================================
-# 3. [1단계] 공시 목록 초경량 수신 (제목/종목명만)
+# 3. 프록시/직접 연결 지원 요청 헬퍼
+# ==========================================
+def make_dart_request(target_url: str, params: dict, as_binary: bool = False):
+  """DART 해외 IP 방화벽 차단을 우회하기 위해 다중 엔드포인트(직접 -> 우회 프록시) 순차 시도"""
+  # 1. 쿼리스트링 조합
+  query_str = "&".join(
+      [f"{k}={quote(str(v))}" for k, v in params.items()]
+  )
+  full_target_url = f"{target_url}?{query_str}"
+
+  headers = {
+      "User-Agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
+          " like Gecko) Chrome/128.0.0.0 Safari/537.36"
+      ),
+      "Accept": "*/*",
+  }
+
+  endpoints = [
+      # (1) 해외 공공 프록시 게이트웨이 1 (AllOrigins - 차단 우회용)
+      (
+          "proxy_allorigins",
+          f"https://api.allorigins.win/raw?url={quote(full_target_url)}",
+      ),
+      # (2) 해외 공공 프록시 게이트웨이 2 (Corsproxy)
+      (
+          "proxy_cors",
+          f"https://corsproxy.io/?url={quote(full_target_url)}",
+      ),
+      # (3) 원본 직접 요청
+      ("direct", full_target_url),
+  ]
+
+  last_error = None
+  for mode, req_url in endpoints:
+    try:
+      res = requests.get(req_url, headers=headers, timeout=8)
+      if res.status_code == 200 and len(res.content) > 0:
+        return res.content if as_binary else res.json()
+    except Exception as e:
+      last_error = e
+      continue
+
+  raise Exception(f"DART 서버 응답 실패 (방화벽 우회 실패): {last_error}")
+
+
+# ==========================================
+# 4. [1단계] 공시 목록 초경량 수신 (제목/종목명만)
 # ==========================================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_disclosure_list(target_date: date):
@@ -38,18 +86,11 @@ def fetch_disclosure_list(target_date: date):
       "crtfc_key": DART_API_KEY,
       "bgn_de": bgn_de,
       "end_de": bgn_de,
-      "pblntf_detail_ty": "B001",  # 주요사항보고서
+      "pblntf_detail_ty": "B001",
       "page_count": 40,
   }
 
-  headers = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-      "Accept": "application/json",
-  }
-
-  res = requests.get(url, params=params, headers=headers, timeout=10)
-  res.raise_for_status()
-  data = res.json()
+  data = make_dart_request(url, params, as_binary=False)
 
   if data.get("status") == "013":
     return []
@@ -72,28 +113,27 @@ def fetch_disclosure_list(target_date: date):
 
 
 # ==========================================
-# 4. [2단계] 선택된 종목만 본문 다운로드 및 일정 추출
+# 5. [2단계] 선택된 종목만 본문 다운로드 및 일정 추출
 # ==========================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_disclosure_text(rcept_no: str) -> str:
   api_url = "https://opendart.fss.or.kr/api/document.xml"
   params = {"crtfc_key": DART_API_KEY, "rcept_no": rcept_no}
 
-  res = requests.get(api_url, params=params, timeout=15)
-  res.raise_for_status()
+  content = make_dart_request(api_url, params, as_binary=True)
 
   full_text = ""
   try:
-    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
       for filename in z.namelist():
         if filename.endswith(".xml") or filename.endswith(".html"):
           raw_data = z.read(filename)
           soup = BeautifulSoup(raw_data, "html.parser")
           full_text += " " + soup.get_text()
   except zipfile.BadZipFile:
-    soup = BeautifulSoup(res.content, "html.parser")
+    soup = BeautifulSoup(content, "html.parser")
     msg = soup.find("message")
-    err_text = msg.text if msg else res.text[:200]
+    err_text = msg.text if msg else content.decode("utf-8", "ignore")[:200]
     raise Exception(f"DART 문서 수신 오류: {err_text}")
 
   return full_text
@@ -128,7 +168,7 @@ def parse_offering_schedule(text: str, corp_name: str):
 
 
 # ==========================================
-# 5. 노션 데이터베이스 등록
+# 6. 노션 데이터베이스 등록
 # ==========================================
 def create_notion_task(title: str, event_date: str, note: str):
   notion.pages.create(
@@ -145,7 +185,7 @@ def create_notion_task(title: str, event_date: str, note: str):
 
 
 # ==========================================
-# 6. Streamlit UI
+# 7. Streamlit UI
 # ==========================================
 st.set_page_config(
     page_title="[국내공시] 유상증자 등록", page_icon="📊", layout="centered"
@@ -169,13 +209,11 @@ with col2:
   st.write("")
   search_btn = st.button("🔍 목록 조회", type="secondary")
 
-# 세션 상태 초기화
 if "disclosures" not in st.session_state:
   st.session_state.disclosures = []
 if "searched" not in st.session_state:
   st.session_state.searched = False
 
-# [1단계] 목록 조회 실행 (초경량)
 if search_btn:
   st.session_state.searched = True
   with st.spinner(f"{selected_date.strftime('%Y-%m-%d')} 유상증자 종목 조회 중..."):
@@ -186,7 +224,6 @@ if search_btn:
       st.session_state.disclosures = []
       st.error(f"공시 목록 조회 실패: {e}")
 
-# 조회 결과 영역
 if st.session_state.searched:
   disclosures = st.session_state.disclosures
   if not disclosures:
@@ -210,7 +247,6 @@ if st.session_state.searched:
         placeholder="등록할 종목을 선택하세요...",
     )
 
-    # [2단계] 선택된 종목만 본문 파싱 및 노션 전송
     if st.button("🚀 선택 종목 상세 분석 및 노션 등록", type="primary"):
       if not selected_labels:
         st.warning("등록할 종목을 1개 이상 선택해 주세요.")
