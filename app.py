@@ -10,7 +10,7 @@ import streamlit as st
 NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
 DATABASE_ID = st.secrets["DATABASE_ID"]
 
-# 💡 복사해주신 '📢 국내공시' 노션 페이지 ID
+# '📢 국내공시' 노션 페이지 ID
 CATEGORY_RELATION_ID = "ab0b581c7f5d8326a7f2812fe3dd5fa6"
 
 notion = Client(auth=NOTION_TOKEN)
@@ -111,21 +111,20 @@ def parse_offering_schedule_from_contents(html_content: str):
 
 
 # ==========================================
-# 4. 노션 데이터베이스 등록 함수 (Relation 속성 연동)
+# 4. 노션 데이터베이스 등록 함수
 # ==========================================
-def create_notion_task(title: str, event_date: str, note: str):
+def create_notion_task(title: str, event_date: str):
   notion.pages.create(
       parent={"database_id": DATABASE_ID},
       properties={
           "이름": {"title": [{"text": {"content": title}}]},
-          # 💡 Relation 형식으로 '📢 국내공시' 연결
           "category": {
               "relation": [{"id": CATEGORY_RELATION_ID}]
           },
-          "구분": {"select": {"name": "공시"}},
+          "구분": {"select": {"name": "유상증자"}},
           "일정": {"date": {"start": event_date}},
           "완료": {"checkbox": False},
-          "텍스트 1": {"rich_text": [{"text": {"content": note}}]},
+          "텍스트 1": {"rich_text": []},
       },
   )
 
@@ -219,27 +218,25 @@ if st.session_state.get("found_notices"):
             sched = parse_offering_schedule_from_contents(notice.get("contents", ""))
             registered = []
 
+            # 💡 [종목코드] 유상증자 (구분) 형식으로 등록
             if sched["record_date"]:
               create_notion_task(
-                  f"[{current_code}] 신주배정기준일",
+                  f"[{current_code}] 유상증자 (신주배정기준일)",
                   sched["record_date"],
-                  f"신주배정기준일 ({notice.get('title', '')})",
               )
               registered.append(f"기준일: {sched['record_date']}")
 
             if sched["sub_start"]:
               create_notion_task(
-                  f"[{current_code}] 청약 개시",
+                  f"[{current_code}] 유상증자 (구주주청약)",
                   sched["sub_start"],
-                  f"청약개시일 ({notice.get('title', '')})",
               )
               registered.append(f"청약일: {sched['sub_start']}")
 
             if sched["pay_date"]:
               create_notion_task(
-                  f"[{current_code}] 주금 납입일",
+                  f"[{current_code}] 유상증자 (주금납입)",
                   sched["pay_date"],
-                  f"주금납입일 ({notice.get('title', '')})",
               )
               registered.append(f"납입일: {sched['pay_date']}")
 
