@@ -22,10 +22,10 @@ HEADERS = {
 
 
 # ==========================================
-# 2. 최근 30건 전체 공시 및 본문 수신
+# 2. 최근 30건 중 '유상증자' 공시만 필터링 수신
 # ==========================================
 def fetch_naver_notices(stock_code: str):
-  """네이버 증권 API로부터 최근 30건 공시와 본문(contents)을 한 번에 수신"""
+  """네이버 증권 API로부터 최근 30건 중 유상증자 공시만 추출"""
   url = f"https://stock.naver.com/api/domestic/detail/notice?itemCode={stock_code}&startIdx=0&pageSize=30"
   res = requests.get(url, headers=HEADERS, timeout=10)
   res.raise_for_status()
@@ -42,28 +42,32 @@ def fetch_naver_notices(stock_code: str):
         or []
     )
 
-  result_list = []
+  filtered_list = []
   for item in notices:
     title = item.get("title", "")
+    
+    # 💡 유상증자 공시만 통과
+    if "유상증자" not in title:
+      continue
+
     notice_no = item.get("no", "")
     raw_datetime = item.get("datetime", "")  # "2026-10-02T14:09:00"
     html_contents = item.get("contents", "")
 
-    # 날짜 포맷팅 (YYYY-MM-DD -> YYYY.MM.DD)
+    # 날짜 포맷팅 (YYYY.MM.DD)
     date_str = ""
     if raw_datetime:
       date_part = raw_datetime.split("T")[0]
       date_str = date_part.replace("-", ".")
 
-    result_list.append({
+    filtered_list.append({
         "title": title,
         "no": str(notice_no),
         "date": date_str,
         "contents": html_contents,
-        "is_offering": "유상증자" in title,
     })
 
-  return result_list
+  return filtered_list
 
 
 # ==========================================
@@ -129,7 +133,7 @@ st.set_page_config(
 )
 st.title("📊 [국내공시] 유상증자 등록")
 st.write(
-    "종목코드(6자리)를 입력하면 최근 30건의 공시 목록을 불러와 노션에 일정을"
+    "종목코드(6자리)를 입력하면 최근 유상증자 공시만 선별하여 노션에 일정을"
     " 등록합니다."
 )
 
@@ -148,7 +152,7 @@ if search_btn:
   if not stock_code:
     st.warning("종목코드를 입력해 주세요.")
   else:
-    with st.spinner(f"종목코드 [{stock_code}] 최근 30건 공시 조회 중..."):
+    with st.spinner(f"종목코드 [{stock_code}] 유상증자 공시 확인 중..."):
       try:
         items = fetch_naver_notices(stock_code)
         st.session_state["found_notices"] = items
@@ -160,14 +164,13 @@ if st.session_state.get("found_notices"):
   notices = st.session_state["found_notices"]
   current_code = st.session_state.get("current_code", "")
 
-  st.write("📋 **최근 30건 공시 목록:**")
+  st.write(f"📋 **발견된 유상증자 공시 {len(notices)}건:**")
 
   for idx, notice in enumerate(notices):
     col_a, col_b = st.columns([3.5, 1.2])
     with col_a:
       date_str = f" ({notice.get('date', '')})" if notice.get("date") else ""
-      prefix = "📌 " if notice.get("is_offering") else ""
-      st.markdown(f"{prefix}**{notice.get('title', '')}**{date_str}")
+      st.markdown(f"**{notice.get('title', '')}**{date_str}")
     with col_b:
       if st.button("🚀 일정등록", key=f"btn_{idx}"):
         with st.spinner("본문 일정 분석 및 노션 등록 중..."):
@@ -214,4 +217,4 @@ if st.session_state.get("found_notices"):
 elif st.session_state.get("current_code") and not st.session_state.get(
     "found_notices"
 ):
-  st.info("해당 종목의 최근 공시 목록이 비어 있습니다.")
+  st.info("해당 종목의 최근 공시 중 유상증자 관련 공시가 없습니다.")
