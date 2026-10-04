@@ -48,7 +48,6 @@ def fetch_naver_notices(stock_code: str):
         or item.get("rcpNo")
     )
 
-    # 날짜 필드 파싱 (다양한 키 대응)
     notice_date = (
         item.get("submitDate")
         or item.get("dt")
@@ -155,35 +154,36 @@ if search_btn:
     with st.spinner(f"종목코드 [{stock_code}] 최근 30건 공시 조회 중..."):
       try:
         items = fetch_naver_notices(stock_code)
-        st.session_state.found_notices = items
-        st.session_state.current_code = stock_code
+        st.session_state["found_notices"] = items
+        st.session_state["current_code"] = stock_code
       except Exception as e:
         st.error(f"공시 목록 조회 실패: {e}")
 
 if st.session_state.get("found_notices"):
   notices = st.session_state["found_notices"]
-  current_code = st.session_state["current_code"]
+  current_code = st.session_state.get("current_code", "")
 
   st.write(f"📋 **최근 30건 공시 목록:**")
 
   for idx, notice in enumerate(notices):
     col_a, col_b = st.columns([3.5, 1.2])
     with col_a:
-      date_str = f" ({notice['date']})" if notice["date"] else ""
-      prefix = "📌 " if notice["is_offering"] else ""
-      st.markdown(f"{prefix}**{notice['title']}**{date_str}")
+      date_str = f" ({notice.get('date', '')})" if notice.get("date") else ""
+      is_offering = notice.get("is_offering", "유상증자" in notice.get("title", ""))
+      prefix = "📌 " if is_offering else ""
+      st.markdown(f"{prefix}**{notice.get('title', '')}**{date_str}")
     with col_b:
       if st.button("🚀 일정등록", key=f"btn_{idx}"):
         with st.spinner("본문 일정 분석 및 노션 등록 중..."):
           try:
-            sched = parse_offering_schedule(current_code, notice["notice_id"])
+            sched = parse_offering_schedule(current_code, notice.get("notice_id", ""))
             registered = []
 
             if sched["record_date"]:
               create_notion_task(
                   f"[{current_code}] 신주배정기준일",
                   sched["record_date"],
-                  f"신주배정기준일 ({notice['title']})",
+                  f"신주배정기준일 ({notice.get('title', '')})",
               )
               registered.append(f"기준일: {sched['record_date']}")
 
@@ -191,7 +191,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 청약 개시",
                   sched["sub_start"],
-                  f"청약개시일 ({notice['title']})",
+                  f"청약개시일 ({notice.get('title', '')})",
               )
               registered.append(f"청약일: {sched['sub_start']}")
 
@@ -199,7 +199,7 @@ if st.session_state.get("found_notices"):
               create_notion_task(
                   f"[{current_code}] 주금 납입일",
                   sched["pay_date"],
-                  f"주금납입일 ({notice['title']})",
+                  f"주금납입일 ({notice.get('title', '')})",
               )
               registered.append(f"납입일: {sched['pay_date']}")
 
