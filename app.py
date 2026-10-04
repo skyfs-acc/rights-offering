@@ -5,7 +5,7 @@ from notion_client import Client
 import streamlit as st
 
 # ==========================================
-# 1. 노션 설정 (Streamlit Secrets에서 안전하게 로드)
+# 1. 노션 설정 (Streamlit Secrets)
 # ==========================================
 NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
 DATABASE_ID = st.secrets["DATABASE_ID"]
@@ -66,7 +66,7 @@ def create_notion_task(title: str, event_date: str, note: str, url: str):
         parent={"database_id": DATABASE_ID},
         properties={
             "이름": {"title": [{"text": {"content": title}}]},
-            "category": {"select": {"name": "📢 국내공시"}},
+            "category": {"select": {"name": "📊 유상증자 / 무상증자"}},
             "구분": {"select": {"name": "공시"}},
             "일정": {"date": {"start": event_date}},
             "완료": {"checkbox": False},
@@ -78,9 +78,9 @@ def create_notion_task(title: str, event_date: str, note: str, url: str):
 # 4. Streamlit UI 구성
 # ==========================================
 st.set_page_config(
-    page_title="유상증자 공시 일정 등록", page_icon="📢", layout="centered"
+    page_title="[국내공시] 유상증자 등록", page_icon="📊", layout="centered"
 )
-st.title("📢 유상증자 일정 원클릭 노션 등록")
+st.title("📊 [국내공시] 유상증자 등록")
 st.write(
     "KIND 공시 상세 페이지 URL을 입력하면 핵심 일정이 노션 TO DO LIST에 자동"
     " 등록됩니다."
