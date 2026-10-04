@@ -133,14 +133,13 @@ st.set_page_config(
     layout="centered"
 )
 
-# 최대 제목 길이에 따라 컨테이너 폭을 동적으로 맞추는 CSS
+# 최대 제목 길이에 맞춰 컨테이너 폭 자동 조절 & 공시 간격 여백 스타일링
 max_len = 0
 if st.session_state.get("found_notices"):
   titles = [n.get("title", "") for n in st.session_state["found_notices"]]
   if titles:
     max_len = max(len(t) for t in titles)
 
-# 기본 750px ~ 가장 긴 제목에 맞춰 최대 1050px까지 유동적으로 확장
 calc_width = min(max(750, max_len * 18 + 180), 1050)
 
 st.markdown(
@@ -151,8 +150,9 @@ st.markdown(
         padding-top: 2rem;
         padding-bottom: 2rem;
     }}
-    .notice-item {{
-        padding: 8px 0;
+    .notice-item-divider {{
+        margin-top: 0.6rem;
+        margin-bottom: 0.9rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }}
     </style>
@@ -197,12 +197,14 @@ if st.session_state.get("found_notices"):
   for idx, notice in enumerate(notices):
     col_a, col_b = st.columns([5, 1.2])
     with col_a:
-      # 💡 1행: 공시 제목
-      st.markdown(f"**{notice.get('title', '')}**")
-      # 💡 2행: 날짜는 무조건 다음 줄에 배치
+      # 💡 1행: 공시일자를 상단에 작고 깔끔하게 배치
       date_val = notice.get("date", "")
-      date_display = f"📅 공시일자: `{date_val}`" if date_val else "📅 공시일자: -"
+      date_display = f"📅 `{date_val}`" if date_val else "📅 `일자 미정`"
       st.caption(date_display)
+      
+      # 💡 2행: 바로 다음 줄에 공시 제목 배치
+      st.markdown(f"**{notice.get('title', '')}**")
+      
     with col_b:
       st.write("")  # 수직 위치 밸런스 조정
       if st.button("🚀 일정등록", key=f"btn_{idx}", use_container_width=True):
@@ -246,6 +248,10 @@ if st.session_state.get("found_notices"):
               )
           except Exception as e:
             st.error(f"등록 실패: {e}")
+
+    # 💡 공시 카드 간 미세 간격 분리선
+    st.markdown('<div class="notice-item-divider"></div>', unsafe_allow_html=True)
+
 elif st.session_state.get("current_code") and not st.session_state.get(
     "found_notices"
 ):
