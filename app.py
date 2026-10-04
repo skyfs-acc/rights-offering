@@ -23,47 +23,56 @@ HEADERS = {
 
 
 # ==========================================
-# 2. 네이버 증권 공시 목록 조회 (해외 IP 차단 없음)
+# 2. 최근 30건 전체 공시 목록 조회
 # ==========================================
 def fetch_naver_notices(stock_code: str):
-  """종목코드(6자리) 기반 최근 공시 목록 조회"""
+  """종목코드(6자리) 기준 최근 30건 전체 공시 조회"""
   url = f"https://stock.naver.com/api/domestic/detail/notice?itemCode={stock_code}&startIdx=0&pageSize=30"
   res = requests.get(url, headers=HEADERS, timeout=10)
   res.raise_for_status()
   data = res.json()
 
-  # 응답 구조 대응 (list 또는 result)
   notices = []
   if isinstance(data, list):
     notices = data
   elif isinstance(data, dict):
     notices = data.get("notices") or data.get("list") or data.get("result") or []
 
-  filtered = []
+  result_list = []
   for item in notices:
     title = item.get("title", "")
-    if "유상증자" in title:
-      notice_id = (
-          item.get("noticeId")
-          or item.get("articleId")
-          or item.get("id")
-          or item.get("rcpNo")
-      )
-      filtered.append({
-          "title": title,
-          "notice_id": str(notice_id),
-          "date": item.get("dt") or item.get("submitDate") or "",
-          "raw": item,
-      })
+    notice_id = (
+        item.get("noticeId")
+        or item.get("articleId")
+        or item.get("id")
+        or item.get("rcpNo")
+    )
 
-  return filtered
+    # 날짜 필드 파싱 (다양한 키 대응)
+    notice_date = (
+        item.get("submitDate")
+        or item.get("dt")
+        or item.get("rceptDt")
+        or item.get("date")
+        or ""
+    )
+    if len(notice_date) == 8 and notice_date.isdigit():
+      notice_date = f"{notice_date[:4]}.{notice_date[4:6]}.{notice_date[6:]}"
+
+    result_list.append({
+        "title": title,
+        "notice_id": str(notice_id),
+        "date": notice_date,
+        "is_offering": "유상증자" in title,
+    })
+
+  return result_list
 
 
 # ==========================================
 # 3. 공시 본문 수신 및 핵심 일정 파싱
 # ==========================================
 def parse_offering_schedule(stock_code: str, notice_id: str):
-  """네이버 웹 상세 페이지에서 본문 수신 후 일정 파싱"""
   detail_url = (
       f"https://stock.naver.com/domestic/stock/{stock_code}/notice/{notice_id}"
   )
@@ -100,7 +109,7 @@ def parse_offering_schedule(stock_code: str, notice_id: str):
 
 
 # ==========================================
-# 4. 노션 등록 함수
+# 4. 노션 데이터베이스 등록 함수
 # ==========================================
 def create_notion_task(title: str, event_date: str, note: str):
   notion.pages.create(
@@ -117,15 +126,15 @@ def create_notion_task(title: str, event_date: str, note: str):
 
 
 # ==========================================
-# 5. 메인 UI
+# 5. Streamlit 메인 UI
 # ==========================================
 st.set_page_config(
     page_title="[국내공시] 유상증자 등록", page_icon="📊", layout="centered"
 )
 st.title("📊 [국내공시] 유상증자 등록")
 st.write(
-    "보유 종목코드(6자리)를 입력하면 최근 유상증자 공시를 찾아 노션에 일정을"
-    " 자동 등록합니다."
+    "종목코드(6자리)를 입력하면 최근 30건의 공시 목록을 불러와 노션에 일정을"
+    " 등록합니다."
 )
 
 col1, col2 = st.columns([3, 1])
@@ -143,7 +152,7 @@ if search_btn:
   if not stock_code:
     st.warning("종목코드를 입력해 주세요.")
   else:
-    with st.spinner(f"종목코드 [{stock_code}] 유상증자 공시 확인 중..."):
+    with st.spinner(f"종목코드 [{stock_code}] 최근 30건 공시 조회 중..."):
       try:
         items = fetch_naver_notices(stock_code)
         st.session_state.found_notices = items
@@ -155,14 +164,16 @@ if st.session_state.get("found_notices"):
   notices = st.session_state["found_notices"]
   current_code = st.session_state["current_code"]
 
-  st.write(f"📋 **발견된 유상증자 공시 {len(notices)}건:**")
+  st.write(f"📋 **최근 30건 공시 목록:**")
 
   for idx, notice in enumerate(notices):
-    col_a, col_b = st.columns([3, 1])
+    col_a, col_b = st.columns([3.5, 1.2])
     with col_a:
-      st.markdown(f"**{notice['title']}** ({notice['date']})")
+      date_str = f" ({notice['date']})" if notice["date"] else ""
+      prefix = "📌 " if notice["is_offering"] else ""
+      st.markdown(f"{prefix}**{notice['title']}**{date_str}")
     with col_b:
-      if st.button("🚀 노션 등록", key=f"btn_{idx}"):
+      if st.button("🚀 일정등록", key=f"btn_{idx}"):
         with st.spinner("본문 일정 분석 및 노션 등록 중..."):
           try:
             sched = parse_offering_schedule(current_code, notice["notice_id"])
@@ -170,7 +181,7 @@ if st.session_state.get("found_notices"):
 
             if sched["record_date"]:
               create_notion_task(
-                  f"[{current_code}] 유상증자 신주배정기준일",
+                  f"[{current_code}] 신주배정기준일",
                   sched["record_date"],
                   f"신주배정기준일 ({notice['title']})",
               )
@@ -178,7 +189,7 @@ if st.session_state.get("found_notices"):
 
             if sched["sub_start"]:
               create_notion_task(
-                  f"[{current_code}] 유상증자 청약 개시",
+                  f"[{current_code}] 청약 개시",
                   sched["sub_start"],
                   f"청약개시일 ({notice['title']})",
               )
@@ -186,7 +197,7 @@ if st.session_state.get("found_notices"):
 
             if sched["pay_date"]:
               create_notion_task(
-                  f"[{current_code}] 유상증자 주금 납입일",
+                  f"[{current_code}] 주금 납입일",
                   sched["pay_date"],
                   f"주금납입일 ({notice['title']})",
               )
@@ -194,17 +205,17 @@ if st.session_state.get("found_notices"):
 
             if registered:
               st.success(
-                  f"✅ 노션 등록 완료!\n- " + "\n- ".join(registered)
+                  f"✅ 일정 등록 완료!\n- " + "\n- ".join(registered)
               )
               st.balloons()
             else:
               st.warning(
-                  "공시 본문에서 핵심 일정을 찾지 못했습니다. 본문 구조를"
-                  " 확인해 주세요."
+                  "공시 본문에서 핵심 일정을 찾지 못했습니다. 유상증자"
+                  " 본문인지 확인해 주세요."
               )
           except Exception as e:
             st.error(f"등록 실패: {e}")
 elif st.session_state.get("current_code") and not st.session_state.get(
     "found_notices"
 ):
-  st.info("해당 종목의 최근 공시 목록에 유상증자 관련 공시가 없습니다.")
+  st.info("해당 종목의 최근 공시 목록이 비어 있습니다.")
