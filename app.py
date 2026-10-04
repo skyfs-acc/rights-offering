@@ -45,8 +45,8 @@ def fetch_naver_notices(stock_code: str):
   filtered_list = []
   for item in notices:
     title = item.get("title", "")
-    
-    # 💡 유상증자 공시만 통과
+
+    # 유상증자 공시만 통과
     if "유상증자" not in title:
       continue
 
@@ -126,24 +126,28 @@ def create_notion_task(title: str, event_date: str, note: str):
 
 
 # ==========================================
-# 5. Streamlit 메인 UI
+# 5. Streamlit 메인 UI (wide 모드 적용)
 # ==========================================
 st.set_page_config(
-    page_title="[국내공시] 유상증자 등록", page_icon="📊", layout="centered"
+    page_title="[국내공시] 유상증자 등록",
+    page_icon="📊",
+    layout="wide"  # 💡 가로폭 전체 확장
 )
+
 st.title("📊 [국내공시] 유상증자 등록")
 st.write(
     "종목코드(6자리)를 입력하면 최근 유상증자 공시만 선별하여 노션에 일정을"
     " 등록합니다."
 )
 
-col1, col2 = st.columns([3, 1])
-with col1:
+# 입력창 영역 (상단도 넉넉하게 배치)
+col_in1, col_in2, _ = st.columns([4, 1.2, 5])
+with col_in1:
   stock_code = st.text_input(
       "종목코드 입력 (예: 448730)",
       placeholder="6자리 종목코드 입력",
   ).strip()
-with col2:
+with col_in2:
   st.write("")
   st.write("")
   search_btn = st.button("🔍 공시 조회", type="primary")
@@ -164,10 +168,12 @@ if st.session_state.get("found_notices"):
   notices = st.session_state["found_notices"]
   current_code = st.session_state.get("current_code", "")
 
-  st.write(f"📋 **발견된 유상증자 공시 {len(notices)}건:**")
+  st.write("")
+  st.markdown(f"#### 📋 발견된 유상증자 공시 {len(notices)}건")
 
   for idx, notice in enumerate(notices):
-    col_a, col_b = st.columns([3.5, 1.2])
+    # 공시명에 가로 폭을 대폭 할당 (8: 1.2)
+    col_a, col_b = st.columns([8, 1.2])
     with col_a:
       date_str = f" ({notice.get('date', '')})" if notice.get("date") else ""
       st.markdown(f"**{notice.get('title', '')}**{date_str}")
