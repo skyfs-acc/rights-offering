@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta
 import re
-from bs4 import BeautifulSoup
-from notion_client import Client
+from datetime import datetime, timedelta
 import requests
 import streamlit as st
+from bs4 import BeautifulSoup
+from notion_client import Client
 
 # ==========================================
 # 1. 노션 설정 로드 (Streamlit Secrets & 상수)
@@ -217,14 +217,28 @@ def parse_offering_schedule_from_contents(html_content: str):
     if m_sub_end:
       sub_end_date = to_standard_date(m_sub_end.group(1))
 
-  # 7. 신주의 배당기산일
+  # 7. 12. 납입일
+  pay_date = find_date(["12. 납입일", "12.납입일", "주금납입일", "납입일"])
+
+  # 8. 14. 신주의 배당기산일
   div_start_date = find_date([
+      "14. 신주의 배당기산일",
+      "14.신주의 배당기산일",
       "신주의 배당기산일",
-      "신주의배당기산일",
       "배당기산일",
   ])
 
-  # 8. 실권주 청약 시작일
+  # 💡 9. 16. 신주의 상장예정일 (주식유통일)
+  listing_date = find_date([
+      "16. 신주의 상장예정일",
+      "16.신주의 상장예정일",
+      "신주의 상장예정일",
+      "신주의상장예정일",
+      "신주상장예정일",
+      "신주의 상장",
+  ])
+
+  # 10. 실권주 청약 시작일
   forfeit_date = ""
   m_forfeit_a = re.search(
       r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:과|와|,)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*양일간",
@@ -261,8 +275,8 @@ def parse_offering_schedule_from_contents(html_content: str):
       "sub_end_date": sub_end_date,
       "forfeit_date": forfeit_date,
       "div_start_date": div_start_date,
-      "pay_date": find_date(["주금납입일", "납입일"]),
-      "listing_date": find_date(["신주상장예정일", "상장예정일", "주식유통일"]),
+      "pay_date": pay_date,
+      "listing_date": listing_date,  # 💡 16. 신주의 상장예정일
       "rights_start": rights_start,
       "rights_end": rights_end,
       "price_fixed_date": find_date(["확정예정일", "확정발행가액공고", "발행가액확정일"]),
@@ -291,7 +305,7 @@ def create_notion_task(title: str, event_date: str):
               "type": "callout",
               "callout": {
                   "icon": {"type": "emoji", "emoji": "💡"},
-                  "color": "gray_background",  # 💡 회색 배경 적용
+                  "color": "gray_background",
                   "rich_text": [{"type": "text", "text": {"content": "메모 : "}}],
               },
           }
@@ -486,6 +500,7 @@ with tab_system:
       with r4_1:
         st.text_input("청약일", value=data.get("sub_date", ""))
         st.text_input("주금납입일", value=data.get("pay_date", ""))
+        # 💡 16. 신주의 상장예정일 (주식유통일)
         st.text_input("주식유통일 (신주상장)", value=data.get("listing_date", ""))
       with r4_2:
         st.text_input("실권주청약일", value=data.get("forfeit_date", ""))
