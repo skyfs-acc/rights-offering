@@ -103,6 +103,7 @@ def parse_offering_schedule_from_contents(html_content: str):
 
   record_date = find_date(["신주배정기준일", "배정기준일"])
 
+  # 권리락일 (기준일 직전 1영업일)
   ex_rights_date = ""
   if record_date:
     try:
@@ -114,17 +115,43 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       pass
 
+  # 💡 6. 신주 발행가액 추출 (확정발행가 우선, 없으면 예정발행가 보통주식 금액 추출)
   issue_price = ""
-  price_match = re.search(r"(?:확정발행가액|예정발행가액|발행가액)[^\d]{0,40}([\d,]+)\s*원", text)
-  if price_match:
-    raw_num = price_match.group(1).replace(",", "")
-    try:
-      issue_price = f"{int(raw_num):,}"
-    except Exception:
-      issue_price = raw_num
+  # 1) 확정발행가 보통주식
+  m_confirm = re.search(
+      r"확정발행가[^\d]{0,40}보통주식[^\d]{0,30}([\d,]+)\s*(?:원)?", text
+  )
+  if m_confirm:
+    val = m_confirm.group(1).replace(",", "")
+    if val.isdigit() and int(val) > 0:
+      issue_price = f"{int(val):,}"
 
+  # 2) 예정발행가 보통주식 (확정가가 미정이거나 없는 경우)
+  if not issue_price:
+    m_expect = re.search(
+        r"예정발행가[^\d]{0,40}보통주식[^\d]{0,30}([\d,]+)\s*(?:원)?", text
+    )
+    if m_expect:
+      val = m_expect.group(1).replace(",", "")
+      if val.isdigit() and int(val) > 0:
+        issue_price = f"{int(val):,}"
+
+  # 3) 범용 발행가액 폴백
+  if not issue_price:
+    m_fallback = re.search(
+        r"(?:신주발행가액|발행가액)[^\d]{0,40}([\d,]+)\s*원", text
+    )
+    if m_fallback:
+      val = m_fallback.group(1).replace(",", "")
+      if val.isdigit() and int(val) > 0:
+        issue_price = f"{int(val):,}"
+
+  # 1주당 신주배정주식수 (x100 하여 적용비율 산출)
   applied_ratio = ""
-  ratio_match = re.search(r"(?:1주당\s*신주배정주식수|1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)", text)
+  ratio_match = re.search(
+      r"(?:1주당\s*신주배정주식수|1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)",
+      text,
+  )
   if ratio_match:
     try:
       raw_val = float(ratio_match.group(1))
@@ -134,6 +161,7 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       applied_ratio = ratio_match.group(1)
 
+  # 신주인수권 상장기간 추출 (시작일 ~ 종료일)
   rights_start = ""
   rights_end = ""
   rights_period_match = re.search(
@@ -144,7 +172,13 @@ def parse_offering_schedule_from_contents(html_content: str):
     def clean_d(raw):
       if not raw:
         return ""
-      c = raw.replace("년", "-").replace("월", "-").replace("일", "").replace(".", "-").replace(" ", "")
+      c = (
+          raw.replace("년", "-")
+          .replace("월", "-")
+          .replace("일", "")
+          .replace(".", "-")
+          .replace(" ", "")
+      )
       p = c.split("-")
       return f"{p[0]}/{int(p[1]):02d}/{int(p[2]):02d}"
 
@@ -176,7 +210,7 @@ def parse_offering_schedule_from_contents(html_content: str):
       "listing_date": find_date(["신주상장예정일", "상장예정일", "주식유통일"]),
       "rights_start": rights_start,
       "rights_end": rights_end,
-      "price_fixed_date": find_date(["확정발행가액공고", "발행가액확정일", "확정예정일"]),
+      "price_fixed_date": find_date(["확정예정일", "확정발행가액공고", "발행가액확정일"]),
   }
 
 
@@ -262,9 +296,10 @@ if search_btn:
         st.error(f"공시 목록 조회 실패: {e}")
 
 # ==========================================
-# 7. 2대 탭 구성 (일정 등록 / 시스템 입력)
+# 7. 2대 탭 구성 (일정 등록 / [09402] 입력)
 # ==========================================
-tab_schedule, tab_system = st.tabs(["📅 일정 등록", "💻 시스템 입력"])
+# 💡 탭 이름 수정: 💻 시스템 입력 -> 💻 [09402] 입력
+tab_schedule, tab_system = st.tabs(["📅 일정 등록", "💻 [09402] 입력"])
 
 # ------------------------------------------
 # TAB 1: 일정 등록
@@ -289,7 +324,6 @@ with tab_schedule:
         st.write("")
         do_register = st.button("🚀 일정등록", key=f"btn_sched_{idx}", use_container_width=True)
 
-      # 💡 결과 메시지를 하단 넓은 영역에 한 줄씩 깔끔하게 표시
       if do_register:
         with st.spinner("일정 분석 및 등록 중..."):
           try:
@@ -329,7 +363,7 @@ with tab_schedule:
 
 
 # ------------------------------------------
-# TAB 2: 시스템 입력 UI
+# TAB 2: [09402] 입력 UI
 # ------------------------------------------
 with tab_system:
   if st.session_state.get("found_notices"):
