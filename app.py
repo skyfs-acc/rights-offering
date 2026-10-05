@@ -197,11 +197,10 @@ def parse_offering_schedule_from_contents(html_content: str):
         "신주인수권상장일",
     ])
 
-  # 6. 구주주 청약일정 (11. 청약예정일 -> 구주주 시작일 / 종료일)
+  # 6. 구주주 청약일정
   sub_start_date = ""
   sub_end_date = ""
 
-  # '구주주' 키워드 뒤에 나오는 '시작일 ... 종료일 ...' 정밀 매칭
   m_sub_pair = re.search(
       r"구주주[^\d]{0,40}시작일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?[^\d]{0,40}종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?",
       text,
@@ -210,7 +209,6 @@ def parse_offering_schedule_from_contents(html_content: str):
     sub_start_date = to_standard_date(m_sub_pair.group(1))
     sub_end_date = to_standard_date(m_sub_pair.group(2))
   else:
-    # 대안: 청약예정일 구주주 영역 단일 추출
     sub_start_date = find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"])
     m_sub_end = re.search(
         r"(?:구주주[^\d]{0,50})?종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[월\.\-]\s*\d{1,2})일?",
@@ -226,7 +224,7 @@ def parse_offering_schedule_from_contents(html_content: str):
       "배당기산일",
   ])
 
-  # 8. 실권주 청약 시작일 (주석 서술형 등)
+  # 8. 실권주 청약 시작일
   forfeit_date = ""
   m_forfeit_a = re.search(
       r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:과|와|,)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*양일간",
@@ -260,8 +258,8 @@ def parse_offering_schedule_from_contents(html_content: str):
       "issue_price": issue_price,
       "applied_ratio": applied_ratio,
       "sub_date": sub_start_date,
-      "sub_end_date": sub_end_date,  # 💡 구주주 청약 종료일
-      "forfeit_date": forfeit_date,  # 💡 실권주 청약일
+      "sub_end_date": sub_end_date,
+      "forfeit_date": forfeit_date,
       "div_start_date": div_start_date,
       "pay_date": find_date(["주금납입일", "납입일"]),
       "listing_date": find_date(["신주상장예정일", "상장예정일", "주식유통일"]),
@@ -272,7 +270,7 @@ def parse_offering_schedule_from_contents(html_content: str):
 
 
 # ==========================================
-# 4. 노션 데이터베이스 등록 함수
+# 4. 노션 데이터베이스 등록 함수 (💡 💡 전구 콜아웃 메모 블록 기본 삽입)
 # ==========================================
 def create_notion_task(title: str, event_date: str):
   notion.pages.create(
@@ -287,6 +285,16 @@ def create_notion_task(title: str, event_date: str):
           "완료": {"checkbox": False},
           "텍스트 1": {"rich_text": []},
       },
+      children=[
+          {
+              "object": "block",
+              "type": "callout",
+              "callout": {
+                  "icon": {"type": "emoji", "emoji": "💡"},
+                  "rich_text": [{"type": "text", "text": {"content": "메모 : "}}],
+              },
+          }
+      ],
   )
 
 
@@ -479,9 +487,7 @@ with tab_system:
         st.text_input("주금납입일", value=data.get("pay_date", ""))
         st.text_input("주식유통일 (신주상장)", value=data.get("listing_date", ""))
       with r4_2:
-        # 실권주 청약일 (주석 주3 등에서 추출된 일자)
         st.text_input("실권주청약일", value=data.get("forfeit_date", ""))
-        # 14. 신주의 배당기산일
         st.text_input("배당기산일", value=data.get("div_start_date", ""))
         st.selectbox("공시확정", ["여", "부"], index=0)
 
@@ -499,7 +505,6 @@ with tab_system:
       with s1_2:
         st.text_input("신주인수권증서폐지일", value=data.get("rights_end", ""))
         st.text_input("공시기준확정일", value=data.get("record_date", ""))
-        # 💡 11. 청약예정일의 구주주 종료일 (예: 2026/11/04) 반영
         st.text_input("유상청약일 (종료)", value=data.get("sub_end_date", ""))
 
       st.text_input("발행비율", value="100.0000000000 (%)")
