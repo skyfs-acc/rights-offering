@@ -223,8 +223,8 @@ st.markdown(
         margin-bottom: 12px;
     }
     .notice-item-divider {
-        margin-top: 0.6rem;
-        margin-bottom: 0.9rem;
+        margin-top: 0.8rem;
+        margin-bottom: 1.1rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }
     </style>
@@ -232,7 +232,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 💡 상단 타이틀 간결화
 st.title("📊 [국내공시] 유상증자")
 
 # ==========================================
@@ -279,7 +278,7 @@ with tab_schedule:
     st.markdown(f"**📋 발견된 유상증자 공시 {len(notices)}건**")
 
     for idx, notice in enumerate(notices):
-      col_a, col_b = st.columns([5, 1.2])
+      col_a, col_b = st.columns([4.8, 1.4])
       with col_a:
         date_val = notice.get("date", "")
         date_display = f"📅 `{date_val}`" if date_val else "📅 `일자 미정`"
@@ -288,34 +287,38 @@ with tab_schedule:
         
       with col_b:
         st.write("")
-        if st.button("🚀 일정등록", key=f"btn_sched_{idx}", use_container_width=True):
-          with st.spinner("일정 분석 및 등록 중..."):
-            try:
-              p = parse_offering_schedule_from_contents(notice.get("contents", ""))
-              registered = []
+        do_register = st.button("🚀 일정등록", key=f"btn_sched_{idx}", use_container_width=True)
 
-              if p.get("ex_rights_date"):
-                d_fmt = p["ex_rights_date"].replace("/", "-")
-                create_notion_task(f"[{current_code}] 유상증자 (권리락일)", d_fmt)
-                registered.append(f"권리락일: {d_fmt}")
+      # 💡 결과 메시지를 하단 넓은 영역에 한 줄씩 깔끔하게 표시
+      if do_register:
+        with st.spinner("일정 분석 및 등록 중..."):
+          try:
+            p = parse_offering_schedule_from_contents(notice.get("contents", ""))
+            registered_lines = []
 
-              if p.get("rights_start"):
-                d_fmt = p["rights_start"].replace("/", "-")
-                create_notion_task(f"[{current_code}] 유상증자 (신주인수권상장)", d_fmt)
-                registered.append(f"신주인수권상장: {d_fmt}")
+            if p.get("ex_rights_date"):
+              d_fmt = p["ex_rights_date"].replace("/", "-")
+              create_notion_task(f"[{current_code}] 유상증자 (권리락일)", d_fmt)
+              registered_lines.append(f"• **권리락일**: {d_fmt}")
 
-              if p.get("sub_date"):
-                d_fmt = p["sub_date"].replace("/", "-")
-                create_notion_task(f"[{current_code}] 유상증자 (구주주청약)", d_fmt)
-                registered.append(f"청약일: {d_fmt}")
+            if p.get("rights_start"):
+              d_fmt = p["rights_start"].replace("/", "-")
+              create_notion_task(f"[{current_code}] 유상증자 (신주인수권상장)", d_fmt)
+              registered_lines.append(f"• **신주인수권상장일**: {d_fmt}")
 
-              if registered:
-                st.success(f"✅ 일정 등록 완료!\n- " + "\n- ".join(registered))
-                st.balloons()
-              else:
-                st.warning("공시 본문에서 핵심 일정을 찾지 못했습니다.")
-            except Exception as e:
-              st.error(f"등록 실패: {e}")
+            if p.get("sub_date"):
+              d_fmt = p["sub_date"].replace("/", "-")
+              create_notion_task(f"[{current_code}] 유상증자 (구주주청약)", d_fmt)
+              registered_lines.append(f"• **청약일**: {d_fmt}")
+
+            if registered_lines:
+              success_msg = "**✅ 일정 등록 완료!**\n\n" + "\n\n".join(registered_lines)
+              st.success(success_msg)
+              st.balloons()
+            else:
+              st.warning("공시 본문에서 핵심 일정을 찾지 못했습니다.")
+          except Exception as e:
+            st.error(f"등록 실패: {e}")
 
       st.markdown('<div class="notice-item-divider"></div>', unsafe_allow_html=True)
 
