@@ -270,7 +270,7 @@ def parse_offering_schedule_from_contents(html_content: str):
 
 
 # ==========================================
-# 4. 노션 데이터베이스 등록 함수 (💡 💡 전구 콜아웃 메모 블록 기본 삽입)
+# 4. 노션 데이터베이스 등록 함수 (💡 전구 콜아웃 + gray_background 회색 배경)
 # ==========================================
 def create_notion_task(title: str, event_date: str):
   notion.pages.create(
@@ -291,6 +291,7 @@ def create_notion_task(title: str, event_date: str):
               "type": "callout",
               "callout": {
                   "icon": {"type": "emoji", "emoji": "💡"},
+                  "color": "gray_background",  # 💡 회색 배경 적용
                   "rich_text": [{"type": "text", "text": {"content": "메모 : "}}],
               },
           }
