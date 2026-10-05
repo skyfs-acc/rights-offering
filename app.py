@@ -92,6 +92,7 @@ def parse_offering_schedule_from_contents(html_content: str):
 
   def find_date(keywords):
     for kw in keywords:
+      # 키워드 뒤 50자 이내에 등장하는 YYYY.MM.DD 또는 YYYY년 MM월 DD일 매칭
       pattern = rf"{kw}[^\d]{{0,50}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
       m = re.search(pattern, text)
       if m:
@@ -123,12 +124,16 @@ def parse_offering_schedule_from_contents(html_content: str):
       "record_date": find_date(["신주배정기준일", "배정기준일"]),
       "sub_start": find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"]),
       "sub_end": find_date(["청약종료일", "청약종료"]),
-      # 💡 신주인수권증서 상장일 / 거래개시일
+      # 💡 '상장기간' 키워드 및 다양한 표현 완벽 대응
       "rights_listing_date": find_date([
-          "신주인수권증서상장예정일",
+          "신주인수권증서 상장기간",
+          "신주인수권증서상장기간",
+          "신주인수권 상장기간",
+          "신주인수권상장기간",
           "신주인수권증서 상장예정일",
-          "신주인수권상장예정일",
+          "신주인수권증서상장예정일",
           "신주인수권 상장예정일",
+          "신주인수권상장예정일",
           "신주인수권증서 상장일",
           "신주인수권 상장일",
           "신주인수권증서 매매기간",
@@ -230,7 +235,7 @@ if search_btn:
 tab_schedule, tab_system = st.tabs(["📅 일정 등록", "💻 시스템 입력"])
 
 # ------------------------------------------
-# TAB 1: 일정 등록 (납입일 제외 -> 신주인수권상장 반영)
+# TAB 1: 일정 등록
 # ------------------------------------------
 with tab_schedule:
   if st.session_state.get("found_notices"):
