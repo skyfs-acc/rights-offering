@@ -123,7 +123,7 @@ def parse_offering_schedule_from_contents(html_content: str):
     try:
       dt = datetime.strptime(record_date, "%Y/%m/%d")
       dt_prev = dt - timedelta(days=1)
-      while dt_prev.weekday() >= 5:  # 5=토, 6=일
+      while dt_prev.weekday() >= 5:
         dt_prev -= timedelta(days=1)
       ex_rights_date = dt_prev.strftime("%Y/%m/%d")
     except Exception:
@@ -157,7 +157,7 @@ def parse_offering_schedule_from_contents(html_content: str):
       if val.isdigit() and int(val) > 0:
         issue_price = f"{int(val):,}"
 
-  # 4. 1주당 신주배정주식수 (x100 하여 적용비율 산출)
+  # 4. 1주당 신주배정주식수
   applied_ratio = ""
   ratio_match = re.search(
       r"(?:1주당\s*신주배정주식수|1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)",
@@ -197,52 +197,71 @@ def parse_offering_schedule_from_contents(html_content: str):
         "신주인수권상장일",
     ])
 
-  # 6. 신주의 배당기산일
+  # 6. 구주주 청약일정 (11. 청약예정일 -> 구주주 시작일 / 종료일)
+  sub_start_date = ""
+  sub_end_date = ""
+
+  # '구주주' 키워드 뒤에 나오는 '시작일 ... 종료일 ...' 정밀 매칭
+  m_sub_pair = re.search(
+      r"구주주[^\d]{0,40}시작일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?[^\d]{0,40}종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?",
+      text,
+  )
+  if m_sub_pair:
+    sub_start_date = to_standard_date(m_sub_pair.group(1))
+    sub_end_date = to_standard_date(m_sub_pair.group(2))
+  else:
+    # 대안: 청약예정일 구주주 영역 단일 추출
+    sub_start_date = find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"])
+    m_sub_end = re.search(
+        r"(?:구주주[^\d]{0,50})?종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[월\.\-]\s*\d{1,2})일?",
+        text,
+    )
+    if m_sub_end:
+      sub_end_date = to_standard_date(m_sub_end.group(1))
+
+  # 7. 신주의 배당기산일
   div_start_date = find_date([
       "신주의 배당기산일",
       "신주의배당기산일",
       "배당기산일",
   ])
 
-  # 💡 7. 주석/서술형 문맥에서 실권주 청약 시작일 추출
-  sub_end_date = ""
-  # 패턴 A: 주석의 '실권주에 대해 YYYY년 MM월 DD일과 YYYY년 MM월 DD일 양일간...'
+  # 8. 실권주 청약 시작일 (주석 서술형 등)
+  forfeit_date = ""
   m_forfeit_a = re.search(
       r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:과|와|,)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*양일간",
       text,
   )
   if m_forfeit_a:
-    sub_end_date = to_standard_date(m_forfeit_a.group(1))
+    forfeit_date = to_standard_date(m_forfeit_a.group(1))
 
-  # 패턴 B: '실권주... YYYY년 MM월 DD일 ~ YYYY년 MM월 DD일' 기간 형태
-  if not sub_end_date:
+  if not forfeit_date:
     m_forfeit_b = re.search(
         r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:~|-|부터)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?",
         text,
     )
     if m_forfeit_b:
-      sub_end_date = to_standard_date(m_forfeit_b.group(1))
+      forfeit_date = to_standard_date(m_forfeit_b.group(1))
 
-  # 패턴 C: 주석 내 일반공모 청약 문구
-  if not sub_end_date:
+  if not forfeit_date:
     m_forfeit_c = re.search(
         r"(?:일반공모|실권주\s*청약)[^\d]{0,50}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})",
         text,
     )
     if m_forfeit_c:
-      sub_end_date = to_standard_date(m_forfeit_c.group(1))
+      forfeit_date = to_standard_date(m_forfeit_c.group(1))
 
-  # 패턴 D: 일반 폴백
-  if not sub_end_date:
-    sub_end_date = find_date(["실권주청약일", "일반공모청약일"])
+  if not forfeit_date:
+    forfeit_date = find_date(["실권주청약일", "일반공모청약일"])
 
   return {
       "record_date": record_date,
       "ex_rights_date": ex_rights_date,
       "issue_price": issue_price,
       "applied_ratio": applied_ratio,
-      "sub_date": find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"]),
-      "sub_end_date": sub_end_date,
+      "sub_date": sub_start_date,
+      "sub_end_date": sub_end_date,  # 💡 구주주 청약 종료일
+      "forfeit_date": forfeit_date,  # 💡 실권주 청약일
       "div_start_date": div_start_date,
       "pay_date": find_date(["주금납입일", "납입일"]),
       "listing_date": find_date(["신주상장예정일", "상장예정일", "주식유통일"]),
@@ -460,7 +479,9 @@ with tab_system:
         st.text_input("주금납입일", value=data.get("pay_date", ""))
         st.text_input("주식유통일 (신주상장)", value=data.get("listing_date", ""))
       with r4_2:
-        st.text_input("실권주청약일", value=data.get("sub_end_date", ""))
+        # 실권주 청약일 (주석 주3 등에서 추출된 일자)
+        st.text_input("실권주청약일", value=data.get("forfeit_date", ""))
+        # 14. 신주의 배당기산일
         st.text_input("배당기산일", value=data.get("div_start_date", ""))
         st.selectbox("공시확정", ["여", "부"], index=0)
 
@@ -478,6 +499,7 @@ with tab_system:
       with s1_2:
         st.text_input("신주인수권증서폐지일", value=data.get("rights_end", ""))
         st.text_input("공시기준확정일", value=data.get("record_date", ""))
+        # 💡 11. 청약예정일의 구주주 종료일 (예: 2026/11/04) 반영
         st.text_input("유상청약일 (종료)", value=data.get("sub_end_date", ""))
 
       st.text_input("발행비율", value="100.0000000000 (%)")
