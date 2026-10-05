@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import re
 from bs4 import BeautifulSoup
 from notion_client import Client
@@ -27,7 +28,6 @@ HEADERS = {
 # 2. 최근 30건 중 '유상증자' 공시 수신 & 제목 정제
 # ==========================================
 def fetch_naver_notices(stock_code: str):
-  """네이버 증권 API로부터 최근 30건 중 유상증자 공시만 추출"""
   url = f"https://stock.naver.com/api/domestic/detail/notice?itemCode={stock_code}&startIdx=0&pageSize=30"
   res = requests.get(url, headers=HEADERS, timeout=10)
   res.raise_for_status()
@@ -47,7 +47,6 @@ def fetch_naver_notices(stock_code: str):
   filtered_list = []
   for item in notices:
     title = item.get("title", "")
-
     if "유상증자" not in title:
       continue
 
@@ -60,8 +59,15 @@ def fetch_naver_notices(stock_code: str):
       date_part = raw_datetime.split("T")[0]
       date_str = date_part.replace("-", ".")
 
+    # 공시 제목 앞단에서 원본 법인명 추출
+    # 예: '삼성에프엔위탁관리부동산투자회사 주식회사 (정정)유상증자결정' -> '삼성에프엔위탁관리부동산투자회사 주식회사'
+    corp_name = re.split(r"\(정정\)|유상증자", title)[0].strip()
+    if not corp_name:
+      corp_name = title
+
     filtered_list.append({
         "title": title,
+        "corp_name": corp_name,
         "no": str(notice_no),
         "date": date_str,
         "contents": html_contents,
@@ -71,28 +77,17 @@ def fetch_naver_notices(stock_code: str):
 
 
 # ==========================================
-# 3. 공시 본문에서 핵심 일정 파싱
+# 3. 공시 본문에서 시스템 입력 파라미터 파싱
 # ==========================================
 def parse_offering_schedule_from_contents(html_content: str):
-  """본문 HTML에서 신주배정기준일, 청약일, 신주인수권상장일 등 추출"""
   if not html_content:
-    return {
-        "record_date": None,
-        "sub_start": None,
-        "sub_end": None,
-        "rights_listing_date": None,
-        "pay_date": None,
-        "listing_date": None,
-        "issue_price": None,
-        "ratio": None,
-    }
+    return {}
 
   soup = BeautifulSoup(html_content, "html.parser")
   text = soup.get_text()
 
   def find_date(keywords):
     for kw in keywords:
-      # 키워드 뒤 50자 이내에 등장하는 YYYY.MM.DD 또는 YYYY년 MM월 DD일 매칭
       pattern = rf"{kw}[^\d]{{0,50}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
       m = re.search(pattern, text)
       if m:
@@ -105,44 +100,90 @@ def parse_offering_schedule_from_contents(html_content: str):
             .replace(" ", "")
         )
         parts = cleaned.split("-")
-        return f"{parts[0]}-{int(parts[1]):02d}-{int(parts[2]):02d}"
-    return None
+        return f"{parts[0]}/{int(parts[1]):02d}/{int(parts[2]):02d}"
+    return ""
 
-  # 1주당 예정/확정 발행가액
-  issue_price = None
+  # 신주배정기준일
+  record_date = find_date(["신주배정기준일", "배정기준일"])
+
+  # 권리락일 계산 (기준일 직전 영업일)
+  ex_rights_date = ""
+  if record_date:
+    try:
+      dt = datetime.strptime(record_date, "%Y/%m/%d")
+      dt_prev = dt - timedelta(days=1)
+      while dt_prev.weekday() >= 5:  # 토(5), 일(6) 건너뛰기
+        dt_prev -= timedelta(days=1)
+      ex_rights_date = dt_prev.strftime("%Y/%m/%d")
+    except Exception:
+      pass
+
+  # 발행가액
+  issue_price = ""
   price_match = re.search(r"(?:확정발행가액|예정발행가액|발행가액)[^\d]{0,40}([\d,]+)\s*원", text)
   if price_match:
-    issue_price = price_match.group(1).replace(",", "")
+    raw_num = price_match.group(1).replace(",", "")
+    try:
+      issue_price = f"{int(raw_num):,}"
+    except Exception:
+      issue_price = raw_num
 
-  # 1주당 신주배정비율
-  ratio = None
-  ratio_match = re.search(r"(?:1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)", text)
+  # 1주당 신주배정비율 (x100 하여 적용비율 산출)
+  applied_ratio = ""
+  ratio_match = re.search(r"(?:1주당\s*신주배정주식수|1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)", text)
   if ratio_match:
-    ratio = ratio_match.group(1)
+    try:
+      raw_val = float(ratio_match.group(1))
+      applied_ratio = f"{raw_val * 100:.11f}".rstrip("0") + "%"
+      if not applied_ratio.endswith("%"):
+        applied_ratio += "%"
+    except Exception:
+      applied_ratio = ratio_match.group(1)
+
+  # 신주인수권 상장기간 추출 (시작일 ~ 종료일)
+  rights_start = ""
+  rights_end = ""
+  rights_period_match = re.search(
+      r"신주인수권증서\s*상장기간[^\d]{0,20}(\d{4}[년\.\-]\s*\d{1,2}[월\.\-]\s*\d{1,2}일?)\s*~?\s*(\d{4}[년\.\-]\s*\d{1,2}[월\.\-]\s*\d{1,2}일?)?",
+      text,
+  )
+  if rights_period_match:
+    def clean_d(raw):
+      if not raw:
+        return ""
+      c = raw.replace("년", "-").replace("월", "-").replace("일", "").replace(".", "-").replace(" ", "")
+      p = c.split("-")
+      return f"{p[0]}/{int(p[1]):02d}/{int(p[2]):02d}"
+
+    rights_start = clean_d(rights_period_match.group(1))
+    rights_end = clean_d(rights_period_match.group(2))
+
+  if not rights_start:
+    rights_start = find_date([
+        "신주인수권증서 상장기간",
+        "신주인수권증서상장기간",
+        "신주인수권 상장기간",
+        "신주인수권상장기간",
+        "신주인수권증서 상장예정일",
+        "신주인수권증서상장예정일",
+        "신주인수권 상장예정일",
+        "신주인수권상장예정일",
+        "신주인수권증서 상장일",
+        "신주인수권상장일",
+    ])
 
   return {
-      "record_date": find_date(["신주배정기준일", "배정기준일"]),
-      "sub_start": find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"]),
-      "sub_end": find_date(["청약종료일", "청약종료"]),
-      # 💡 '상장기간' 키워드 및 다양한 표현 완벽 대응
-      "rights_listing_date": find_date([
-          "신주인수권증서 상장기간",
-          "신주인수권증서상장기간",
-          "신주인수권 상장기간",
-          "신주인수권상장기간",
-          "신주인수권증서 상장예정일",
-          "신주인수권증서상장예정일",
-          "신주인수권 상장예정일",
-          "신주인수권상장예정일",
-          "신주인수권증서 상장일",
-          "신주인수권 상장일",
-          "신주인수권증서 매매기간",
-          "신주인수권증서매매기간",
-      ]),
-      "pay_date": find_date(["주금납입일", "납입일"]),
-      "listing_date": find_date(["신주상장예정일", "상장예정일", "신주의상장"]),
+      "record_date": record_date,
+      "ex_rights_date": ex_rights_date,
       "issue_price": issue_price,
-      "ratio": ratio,
+      "applied_ratio": applied_ratio,
+      "sub_date": find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"]),
+      "sub_end_date": find_date(["청약종료일", "청약종료"]),
+      "pay_date": find_date(["주금납입일", "납입일"]),
+      "listing_date": find_date(["신주상장예정일", "상장예정일", "주식유통일"]),
+      "rights_start": rights_start,
+      "rights_end": rights_end,
+      "price_fixed_date": find_date(["확정발행가액공고", "발행가액확정일", "확정예정일"]),
   }
 
 
@@ -174,27 +215,25 @@ st.set_page_config(
     layout="centered"
 )
 
-max_len = 0
-if st.session_state.get("found_notices"):
-  titles = [n.get("title", "") for n in st.session_state["found_notices"]]
-  if titles:
-    max_len = max(len(t) for t in titles)
-
-calc_width = min(max(750, max_len * 18 + 180), 1050)
-
 st.markdown(
-    f"""
+    """
     <style>
-    .block-container {{
-        max-width: {calc_width}px !important;
-        padding-top: 2rem;
+    .block-container {
+        max-width: 820px !important;
+        padding-top: 1.5rem;
         padding-bottom: 2rem;
-    }}
-    .notice-item-divider {{
+    }
+    .system-title {
+        font-size: 13px;
+        color: #ff8c8c;
+        font-weight: bold;
+        margin-bottom: 12px;
+    }
+    .notice-item-divider {
         margin-top: 0.6rem;
         margin-bottom: 0.9rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    }}
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -258,50 +297,35 @@ with tab_schedule:
         if st.button("🚀 일정등록", key=f"btn_sched_{idx}", use_container_width=True):
           with st.spinner("일정 분석 및 등록 중..."):
             try:
-              sched = parse_offering_schedule_from_contents(notice.get("contents", ""))
+              p = parse_offering_schedule_from_contents(notice.get("contents", ""))
               registered = []
 
-              # 1. 신주배정기준일
-              if sched["record_date"]:
-                create_notion_task(
-                    f"[{current_code}] 유상증자 (신주배정기준일)",
-                    sched["record_date"],
-                )
-                registered.append(f"기준일: {sched['record_date']}")
+              if p.get("record_date"):
+                d_fmt = p["record_date"].replace("/", "-")
+                create_notion_task(f"[{current_code}] 유상증자 (신주배정기준일)", d_fmt)
+                registered.append(f"기준일: {d_fmt}")
 
-              # 2. 신주인수권 상장일
-              if sched["rights_listing_date"]:
-                create_notion_task(
-                    f"[{current_code}] 유상증자 (신주인수권상장)",
-                    sched["rights_listing_date"],
-                )
-                registered.append(f"신주인수권상장: {sched['rights_listing_date']}")
+              if p.get("rights_start"):
+                d_fmt = p["rights_start"].replace("/", "-")
+                create_notion_task(f"[{current_code}] 유상증자 (신주인수권상장)", d_fmt)
+                registered.append(f"신주인수권상장: {d_fmt}")
 
-              # 3. 구주주청약 개시일
-              if sched["sub_start"]:
-                create_notion_task(
-                    f"[{current_code}] 유상증자 (구주주청약)",
-                    sched["sub_start"],
-                )
-                registered.append(f"청약일: {sched['sub_start']}")
+              if p.get("sub_date"):
+                d_fmt = p["sub_date"].replace("/", "-")
+                create_notion_task(f"[{current_code}] 유상증자 (구주주청약)", d_fmt)
+                registered.append(f"청약일: {d_fmt}")
 
               if registered:
-                st.success(
-                    f"✅ 일정 등록 완료!\n- " + "\n- ".join(registered)
-                )
+                st.success(f"✅ 일정 등록 완료!\n- " + "\n- ".join(registered))
                 st.balloons()
               else:
-                st.warning(
-                    "공시 본문에서 핵심 일정을 찾지 못했습니다. 본문 세부 내용을 확인해 주세요."
-                )
+                st.warning("공시 본문에서 핵심 일정을 찾지 못했습니다.")
             except Exception as e:
               st.error(f"등록 실패: {e}")
 
       st.markdown('<div class="notice-item-divider"></div>', unsafe_allow_html=True)
 
-  elif st.session_state.get("current_code") and not st.session_state.get(
-      "found_notices"
-  ):
+  elif st.session_state.get("current_code") and not st.session_state.get("found_notices"):
     st.info("해당 종목의 최근 공시 중 유상증자 관련 공시가 없습니다.")
   else:
     st.info("상단에 종목코드를 입력하고 [🔍 공시 조회]를 눌러주세요.")
@@ -324,41 +348,73 @@ with tab_system:
     )
 
     selected_notice = notices[selected_idx]
-    parsed_info = parse_offering_schedule_from_contents(selected_notice.get("contents", ""))
+    data = parse_offering_schedule_from_contents(selected_notice.get("contents", ""))
 
-    st.markdown("#### 📝 시스템 등록 항목 가이드")
-    st.caption("공시 본문에서 자동 추출된 값입니다. 확인 후 수정하거나 바로 복사하여 시스템에 입력하세요.")
+    inst_code_5 = current_code[:5] if len(current_code) >= 5 else current_code
+    # 공시에서 가져온 법인명 그대로 사용
+    corp_name = selected_notice.get("corp_name", "")
 
-    st.markdown("##### 1. 주요 일정")
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-      val_record = st.text_input("신주배정기준일", value=parsed_info.get("record_date") or "", key="sys_record")
-      val_rights = st.text_input("신주인수권 상장일", value=parsed_info.get("rights_listing_date") or "", key="sys_rights")
-      val_sub_start = st.text_input("구주주청약 시작일", value=parsed_info.get("sub_start") or "", key="sys_sub_start")
-    with col_d2:
-      val_sub_end = st.text_input("구주주청약 종료일", value=parsed_info.get("sub_end") or "", key="sys_sub_end")
-      val_pay = st.text_input("주금납입일", value=parsed_info.get("pay_date") or "", key="sys_pay")
-      val_listing = st.text_input("신주상장예정일", value=parsed_info.get("listing_date") or "", key="sys_listing")
+    st.write("")
+    
+    # [상단 박스] - 기본 정보 & 일정
+    st.markdown('<div class="system-title">■ 기본 정보 및 청약/배정 일정</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+      r1_1, r1_2, r1_3 = st.columns([1.5, 3.2, 1.3])
+      with r1_1:
+        st.text_input("발행기관", value=inst_code_5, disabled=True)
+      with r1_2:
+        # 공시에서 추출한 법인명 그대로 표시
+        st.text_input("발행회사명", value=corp_name, disabled=True)
+      with r1_3:
+        st.text_input("증자방법", value="유상", disabled=True)
 
-    st.markdown("##### 2. 가격 및 배정비율")
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-      val_price = st.text_input("발행가액 (원)", value=parsed_info.get("issue_price") or "", key="sys_price")
-    with col_p2:
-      val_ratio = st.text_input("1주당 신주배정비율", value=parsed_info.get("ratio") or "", key="sys_ratio")
+      r2_1, r2_2, r2_3 = st.columns([1.5, 3.2, 1.3])
+      with r2_1:
+        st.text_input("배정방법", value="11", disabled=True)
+      with r2_2:
+        st.text_input("배정형태", value="보->보", disabled=True)
+      with r2_3:
+        st.write("")
 
-    st.markdown("##### 3. 복사용 텍스트 요약")
-    summary_text = (
-        f"[종목코드] {current_code}\n"
-        f"[기준일] {val_record}\n"
-        f"[신주인수권상장] {val_rights}\n"
-        f"[청약기간] {val_sub_start} ~ {val_sub_end}\n"
-        f"[납입일] {val_pay}\n"
-        f"[신주상장예정일] {val_listing}\n"
-        f"[발행가액] {val_price}원\n"
-        f"[배정비율] {val_ratio}"
-    )
-    st.code(summary_text, language="text")
+      st.markdown("---")
+
+      r3_1, r3_2 = st.columns(2)
+      with r3_1:
+        st.text_input("권리락일", value=data.get("ex_rights_date", ""))
+        st.text_input("발행가", value=data.get("issue_price", ""))
+      with r3_2:
+        st.text_input("배정기준일", value=data.get("record_date", ""))
+        st.text_input("적용비율", value=data.get("applied_ratio", ""))
+
+      st.markdown("---")
+
+      r4_1, r4_2 = st.columns(2)
+      with r4_1:
+        st.text_input("청약일", value=data.get("sub_date", ""))
+        st.text_input("주금납입일", value=data.get("pay_date", ""))
+        st.text_input("주식유통일 (신주상장)", value=data.get("listing_date", ""))
+      with r4_2:
+        st.text_input("실권주청약일", value=data.get("sub_end_date", ""))
+        st.text_input("배당기산일", value=data.get("record_date", ""))
+        st.selectbox("공시확정", ["여", "부"], index=0)
+
+    # [하단 박스] - 신주인수권증서 관련 사항
+    st.write("")
+    st.markdown('<div class="system-title">■ 신주인수권증서 등록 정보</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+      st.radio("신주인수권증서발행", ["여", "부"], index=0, horizontal=True)
+
+      s1_1, s1_2 = st.columns(2)
+      with s1_1:
+        st.text_input("신주인수권증서상장일", value=data.get("rights_start", ""))
+        st.text_input("발행가확정일", value=data.get("price_fixed_date", ""))
+        st.text_input("유상청약일 (시작)", value=data.get("sub_date", ""))
+      with s1_2:
+        st.text_input("신주인수권증서폐지일", value=data.get("rights_end", ""))
+        st.text_input("공시기준확정일", value=data.get("record_date", ""))
+        st.text_input("유상청약일 (종료)", value=data.get("sub_end_date", ""))
+
+      st.text_input("발행비율", value="100.0000000000 (%)")
 
   else:
-    st.info("상단에 종목코드를 입력하고 [🔍 공시 조회]를 눌러주시면 파라미터가 자동으로 채워집니다.")
+    st.info("상단에 종목코드를 입력하고 [🔍 공시 조회]를 눌러주시면 시스템 입력 데이터가 자동 채워집니다.")
