@@ -59,7 +59,6 @@ def fetch_naver_notices(stock_code: str):
       date_part = raw_datetime.split("T")[0]
       date_str = date_part.replace("-", ".")
 
-    # 공시 제목 앞단에서 법인명 추출
     corp_name = re.split(r"\(정정\)|유상증자", title)[0].strip()
     if not corp_name:
       corp_name = title
@@ -102,10 +101,8 @@ def parse_offering_schedule_from_contents(html_content: str):
         return f"{parts[0]}/{int(parts[1]):02d}/{int(parts[2]):02d}"
     return ""
 
-  # 신주배정기준일
   record_date = find_date(["신주배정기준일", "배정기준일"])
 
-  # 권리락일 계산 (기준일 직전 1영업일)
   ex_rights_date = ""
   if record_date:
     try:
@@ -117,7 +114,6 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       pass
 
-  # 발행가액
   issue_price = ""
   price_match = re.search(r"(?:확정발행가액|예정발행가액|발행가액)[^\d]{0,40}([\d,]+)\s*원", text)
   if price_match:
@@ -127,7 +123,6 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       issue_price = raw_num
 
-  # 1주당 신주배정비율 (x100 하여 적용비율 산출)
   applied_ratio = ""
   ratio_match = re.search(r"(?:1주당\s*신주배정주식수|1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)", text)
   if ratio_match:
@@ -139,7 +134,6 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       applied_ratio = ratio_match.group(1)
 
-  # 신주인수권 상장기간 추출 (시작일 ~ 종료일)
   rights_start = ""
   rights_end = ""
   rights_period_match = re.search(
@@ -209,7 +203,7 @@ def create_notion_task(title: str, event_date: str):
 # 5. Streamlit 메인 설정 & 스타일
 # ==========================================
 st.set_page_config(
-    page_title="[국내공시] 유상증자 관리",
+    page_title="[국내공시] 유상증자",
     page_icon="📊",
     layout="centered"
 )
@@ -238,7 +232,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("📊 [국내공시] 유상증자 관리")
+# 💡 상단 타이틀 간결화
+st.title("📊 [국내공시] 유상증자")
 
 # ==========================================
 # 6. 상단 공통 종목코드 검색창
@@ -273,7 +268,7 @@ if search_btn:
 tab_schedule, tab_system = st.tabs(["📅 일정 등록", "💻 시스템 입력"])
 
 # ------------------------------------------
-# TAB 1: 일정 등록 (기준일 대신 '권리락일' 등록)
+# TAB 1: 일정 등록
 # ------------------------------------------
 with tab_schedule:
   if st.session_state.get("found_notices"):
@@ -299,19 +294,16 @@ with tab_schedule:
               p = parse_offering_schedule_from_contents(notice.get("contents", ""))
               registered = []
 
-              # 1. 권리락일 (기준일 전 영업일) 등록
               if p.get("ex_rights_date"):
                 d_fmt = p["ex_rights_date"].replace("/", "-")
                 create_notion_task(f"[{current_code}] 유상증자 (권리락일)", d_fmt)
                 registered.append(f"권리락일: {d_fmt}")
 
-              # 2. 신주인수권 상장일 등록
               if p.get("rights_start"):
                 d_fmt = p["rights_start"].replace("/", "-")
                 create_notion_task(f"[{current_code}] 유상증자 (신주인수권상장)", d_fmt)
                 registered.append(f"신주인수권상장: {d_fmt}")
 
-              # 3. 구주주청약 개시일 등록
               if p.get("sub_date"):
                 d_fmt = p["sub_date"].replace("/", "-")
                 create_notion_task(f"[{current_code}] 유상증자 (구주주청약)", d_fmt)
@@ -330,7 +322,7 @@ with tab_schedule:
   elif st.session_state.get("current_code") and not st.session_state.get("found_notices"):
     st.info("해당 종목의 최근 공시 중 유상증자 관련 공시가 없습니다.")
   else:
-    st.info("상단에 종목코드를 입력하고 [🔍 공시 조회]를 눌러주세요.")
+    st.info("상단에 종목코드(6자리)를 입력하고 [🔍 공시 조회]를 눌러주세요.")
 
 
 # ------------------------------------------
@@ -417,4 +409,4 @@ with tab_system:
       st.text_input("발행비율", value="100.0000000000 (%)")
 
   else:
-    st.info("상단에 종목코드를 입력하고 [🔍 공시 조회]를 눌러주시면 시스템 입력 데이터가 자동 채워집니다.")
+    st.info("상단에 종목코드(6자리)를 입력하고 [🔍 공시 조회]를 눌러주시면 시스템 입력 데이터가 자동 채워집니다.")
