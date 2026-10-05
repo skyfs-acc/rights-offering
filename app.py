@@ -59,8 +59,7 @@ def fetch_naver_notices(stock_code: str):
       date_part = raw_datetime.split("T")[0]
       date_str = date_part.replace("-", ".")
 
-    # 공시 제목 앞단에서 원본 법인명 추출
-    # 예: '삼성에프엔위탁관리부동산투자회사 주식회사 (정정)유상증자결정' -> '삼성에프엔위탁관리부동산투자회사 주식회사'
+    # 공시 제목 앞단에서 법인명 추출
     corp_name = re.split(r"\(정정\)|유상증자", title)[0].strip()
     if not corp_name:
       corp_name = title
@@ -106,13 +105,13 @@ def parse_offering_schedule_from_contents(html_content: str):
   # 신주배정기준일
   record_date = find_date(["신주배정기준일", "배정기준일"])
 
-  # 권리락일 계산 (기준일 직전 영업일)
+  # 권리락일 계산 (기준일 직전 1영업일)
   ex_rights_date = ""
   if record_date:
     try:
       dt = datetime.strptime(record_date, "%Y/%m/%d")
       dt_prev = dt - timedelta(days=1)
-      while dt_prev.weekday() >= 5:  # 토(5), 일(6) 건너뛰기
+      while dt_prev.weekday() >= 5:  # 5=토, 6=일
         dt_prev -= timedelta(days=1)
       ex_rights_date = dt_prev.strftime("%Y/%m/%d")
     except Exception:
@@ -274,7 +273,7 @@ if search_btn:
 tab_schedule, tab_system = st.tabs(["📅 일정 등록", "💻 시스템 입력"])
 
 # ------------------------------------------
-# TAB 1: 일정 등록
+# TAB 1: 일정 등록 (기준일 대신 '권리락일' 등록)
 # ------------------------------------------
 with tab_schedule:
   if st.session_state.get("found_notices"):
@@ -300,16 +299,19 @@ with tab_schedule:
               p = parse_offering_schedule_from_contents(notice.get("contents", ""))
               registered = []
 
-              if p.get("record_date"):
-                d_fmt = p["record_date"].replace("/", "-")
-                create_notion_task(f"[{current_code}] 유상증자 (신주배정기준일)", d_fmt)
-                registered.append(f"기준일: {d_fmt}")
+              # 1. 권리락일 (기준일 전 영업일) 등록
+              if p.get("ex_rights_date"):
+                d_fmt = p["ex_rights_date"].replace("/", "-")
+                create_notion_task(f"[{current_code}] 유상증자 (권리락일)", d_fmt)
+                registered.append(f"권리락일: {d_fmt}")
 
+              # 2. 신주인수권 상장일 등록
               if p.get("rights_start"):
                 d_fmt = p["rights_start"].replace("/", "-")
                 create_notion_task(f"[{current_code}] 유상증자 (신주인수권상장)", d_fmt)
                 registered.append(f"신주인수권상장: {d_fmt}")
 
+              # 3. 구주주청약 개시일 등록
               if p.get("sub_date"):
                 d_fmt = p["sub_date"].replace("/", "-")
                 create_notion_task(f"[{current_code}] 유상증자 (구주주청약)", d_fmt)
@@ -351,7 +353,6 @@ with tab_system:
     data = parse_offering_schedule_from_contents(selected_notice.get("contents", ""))
 
     inst_code_5 = current_code[:5] if len(current_code) >= 5 else current_code
-    # 공시에서 가져온 법인명 그대로 사용
     corp_name = selected_notice.get("corp_name", "")
 
     st.write("")
@@ -363,7 +364,6 @@ with tab_system:
       with r1_1:
         st.text_input("발행기관", value=inst_code_5, disabled=True)
       with r1_2:
-        # 공시에서 추출한 법인명 그대로 표시
         st.text_input("발행회사명", value=corp_name, disabled=True)
       with r1_3:
         st.text_input("증자방법", value="유상", disabled=True)
