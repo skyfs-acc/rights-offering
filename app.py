@@ -1,9 +1,9 @@
-import re
 from datetime import datetime, timedelta
-import requests
-import streamlit as st
+import re
 from bs4 import BeautifulSoup
 from notion_client import Client
+import requests
+import streamlit as st
 
 # ==========================================
 # 1. 노션 설정 로드 (Streamlit Secrets & 상수)
@@ -11,7 +11,8 @@ from notion_client import Client
 NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
 DATABASE_ID = st.secrets["DATABASE_ID"]
 
-CATEGORY_RELATION_ID = "ab0b581c7f5d8326a7f2812fe3dd5fa6"
+# 회사 워크스페이스용 카테고리 ID (📌 펀드 관리 & 이슈)
+CATEGORY_RELATION_ID = "e409fb1b1f8982df81928157b6bd5374"
 
 notion = Client(auth=NOTION_TOKEN)
 
@@ -228,7 +229,7 @@ def parse_offering_schedule_from_contents(html_content: str):
       "배당기산일",
   ])
 
-  # 💡 9. 16. 신주의 상장예정일 (주식유통일)
+  # 9. 16. 신주의 상장예정일 (주식유통일)
   listing_date = find_date([
       "16. 신주의 상장예정일",
       "16.신주의 상장예정일",
@@ -276,7 +277,7 @@ def parse_offering_schedule_from_contents(html_content: str):
       "forfeit_date": forfeit_date,
       "div_start_date": div_start_date,
       "pay_date": pay_date,
-      "listing_date": listing_date,  # 💡 16. 신주의 상장예정일
+      "listing_date": listing_date,
       "rights_start": rights_start,
       "rights_end": rights_end,
       "price_fixed_date": find_date(["확정예정일", "확정발행가액공고", "발행가액확정일"]),
@@ -284,7 +285,7 @@ def parse_offering_schedule_from_contents(html_content: str):
 
 
 # ==========================================
-# 4. 노션 데이터베이스 등록 함수 (💡 전구 콜아웃 + gray_background 회색 배경)
+# 4. 노션 데이터베이스 등록 함수
 # ==========================================
 def create_notion_task(title: str, event_date: str):
   notion.pages.create(
@@ -409,16 +410,19 @@ with tab_schedule:
             p = parse_offering_schedule_from_contents(notice.get("contents", ""))
             registered_lines = []
 
+            # 1. 권리락일 등록
             if p.get("ex_rights_date"):
               d_fmt = p["ex_rights_date"].replace("/", "-")
               create_notion_task(f"[{current_code}] 유상증자 (권리락일)", d_fmt)
               registered_lines.append(f"• **권리락일**: {d_fmt}")
 
+            # 2. 신주인수권 상장일 등록
             if p.get("rights_start"):
               d_fmt = p["rights_start"].replace("/", "-")
               create_notion_task(f"[{current_code}] 유상증자 (신주인수권상장)", d_fmt)
               registered_lines.append(f"• **신주인수권상장일**: {d_fmt}")
 
+            # 3. 구주주 청약 시작일 등록
             if p.get("sub_date"):
               d_fmt = p["sub_date"].replace("/", "-")
               create_notion_task(f"[{current_code}] 유상증자 (구주주청약)", d_fmt)
@@ -500,7 +504,6 @@ with tab_system:
       with r4_1:
         st.text_input("청약일", value=data.get("sub_date", ""))
         st.text_input("주금납입일", value=data.get("pay_date", ""))
-        # 💡 16. 신주의 상장예정일 (주식유통일)
         st.text_input("주식유통일 (신주상장)", value=data.get("listing_date", ""))
       with r4_2:
         st.text_input("실권주청약일", value=data.get("forfeit_date", ""))
