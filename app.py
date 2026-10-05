@@ -101,9 +101,23 @@ def parse_offering_schedule_from_contents(html_content: str):
         return f"{parts[0]}/{int(parts[1]):02d}/{int(parts[2]):02d}"
     return ""
 
+  def to_standard_date(raw_str):
+    if not raw_str:
+      return ""
+    c = (
+        raw_str.replace("년", "-")
+        .replace("월", "-")
+        .replace("일", "")
+        .replace(".", "-")
+        .replace(" ", "")
+    )
+    p = c.split("-")
+    return f"{p[0]}/{int(p[1]):02d}/{int(p[2]):02d}"
+
+  # 1. 신주배정기준일
   record_date = find_date(["신주배정기준일", "배정기준일"])
 
-  # 권리락일 (기준일 직전 1영업일)
+  # 2. 권리락일 (기준일 직전 1영업일)
   ex_rights_date = ""
   if record_date:
     try:
@@ -115,9 +129,8 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       pass
 
-  # 💡 6. 신주 발행가액 추출 (확정발행가 우선, 없으면 예정발행가 보통주식 금액 추출)
+  # 3. 신주 발행가액 추출
   issue_price = ""
-  # 1) 확정발행가 보통주식
   m_confirm = re.search(
       r"확정발행가[^\d]{0,40}보통주식[^\d]{0,30}([\d,]+)\s*(?:원)?", text
   )
@@ -126,7 +139,6 @@ def parse_offering_schedule_from_contents(html_content: str):
     if val.isdigit() and int(val) > 0:
       issue_price = f"{int(val):,}"
 
-  # 2) 예정발행가 보통주식 (확정가가 미정이거나 없는 경우)
   if not issue_price:
     m_expect = re.search(
         r"예정발행가[^\d]{0,40}보통주식[^\d]{0,30}([\d,]+)\s*(?:원)?", text
@@ -136,7 +148,6 @@ def parse_offering_schedule_from_contents(html_content: str):
       if val.isdigit() and int(val) > 0:
         issue_price = f"{int(val):,}"
 
-  # 3) 범용 발행가액 폴백
   if not issue_price:
     m_fallback = re.search(
         r"(?:신주발행가액|발행가액)[^\d]{0,40}([\d,]+)\s*원", text
@@ -146,7 +157,7 @@ def parse_offering_schedule_from_contents(html_content: str):
       if val.isdigit() and int(val) > 0:
         issue_price = f"{int(val):,}"
 
-  # 1주당 신주배정주식수 (x100 하여 적용비율 산출)
+  # 4. 1주당 신주배정주식수 (x100 하여 적용비율 산출)
   applied_ratio = ""
   ratio_match = re.search(
       r"(?:1주당\s*신주배정주식수|1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)",
@@ -161,7 +172,7 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       applied_ratio = ratio_match.group(1)
 
-  # 신주인수권 상장기간 추출 (시작일 ~ 종료일)
+  # 5. 신주인수권 상장기간 (시작일 ~ 종료일)
   rights_start = ""
   rights_end = ""
   rights_period_match = re.search(
@@ -169,21 +180,8 @@ def parse_offering_schedule_from_contents(html_content: str):
       text,
   )
   if rights_period_match:
-    def clean_d(raw):
-      if not raw:
-        return ""
-      c = (
-          raw.replace("년", "-")
-          .replace("월", "-")
-          .replace("일", "")
-          .replace(".", "-")
-          .replace(" ", "")
-      )
-      p = c.split("-")
-      return f"{p[0]}/{int(p[1]):02d}/{int(p[2]):02d}"
-
-    rights_start = clean_d(rights_period_match.group(1))
-    rights_end = clean_d(rights_period_match.group(2))
+    rights_start = to_standard_date(rights_period_match.group(1))
+    rights_end = to_standard_date(rights_period_match.group(2))
 
   if not rights_start:
     rights_start = find_date([
@@ -199,13 +197,53 @@ def parse_offering_schedule_from_contents(html_content: str):
         "신주인수권상장일",
     ])
 
+  # 6. 신주의 배당기산일
+  div_start_date = find_date([
+      "신주의 배당기산일",
+      "신주의배당기산일",
+      "배당기산일",
+  ])
+
+  # 💡 7. 주석/서술형 문맥에서 실권주 청약 시작일 추출
+  sub_end_date = ""
+  # 패턴 A: 주석의 '실권주에 대해 YYYY년 MM월 DD일과 YYYY년 MM월 DD일 양일간...'
+  m_forfeit_a = re.search(
+      r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:과|와|,)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*양일간",
+      text,
+  )
+  if m_forfeit_a:
+    sub_end_date = to_standard_date(m_forfeit_a.group(1))
+
+  # 패턴 B: '실권주... YYYY년 MM월 DD일 ~ YYYY년 MM월 DD일' 기간 형태
+  if not sub_end_date:
+    m_forfeit_b = re.search(
+        r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:~|-|부터)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?",
+        text,
+    )
+    if m_forfeit_b:
+      sub_end_date = to_standard_date(m_forfeit_b.group(1))
+
+  # 패턴 C: 주석 내 일반공모 청약 문구
+  if not sub_end_date:
+    m_forfeit_c = re.search(
+        r"(?:일반공모|실권주\s*청약)[^\d]{0,50}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})",
+        text,
+    )
+    if m_forfeit_c:
+      sub_end_date = to_standard_date(m_forfeit_c.group(1))
+
+  # 패턴 D: 일반 폴백
+  if not sub_end_date:
+    sub_end_date = find_date(["실권주청약일", "일반공모청약일"])
+
   return {
       "record_date": record_date,
       "ex_rights_date": ex_rights_date,
       "issue_price": issue_price,
       "applied_ratio": applied_ratio,
       "sub_date": find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"]),
-      "sub_end_date": find_date(["청약종료일", "청약종료"]),
+      "sub_end_date": sub_end_date,
+      "div_start_date": div_start_date,
       "pay_date": find_date(["주금납입일", "납입일"]),
       "listing_date": find_date(["신주상장예정일", "상장예정일", "주식유통일"]),
       "rights_start": rights_start,
@@ -298,7 +336,6 @@ if search_btn:
 # ==========================================
 # 7. 2대 탭 구성 (일정 등록 / [09402] 입력)
 # ==========================================
-# 💡 탭 이름 수정: 💻 시스템 입력 -> 💻 [09402] 입력
 tab_schedule, tab_system = st.tabs(["📅 일정 등록", "💻 [09402] 입력"])
 
 # ------------------------------------------
@@ -424,7 +461,7 @@ with tab_system:
         st.text_input("주식유통일 (신주상장)", value=data.get("listing_date", ""))
       with r4_2:
         st.text_input("실권주청약일", value=data.get("sub_end_date", ""))
-        st.text_input("배당기산일", value=data.get("record_date", ""))
+        st.text_input("배당기산일", value=data.get("div_start_date", ""))
         st.selectbox("공시확정", ["여", "부"], index=0)
 
     # [하단 박스] - 신주인수권증서 관련 사항
