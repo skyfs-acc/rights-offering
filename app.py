@@ -121,17 +121,36 @@ def parse_offering_schedule_from_contents(html_content: str):
     d_regex = r"(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})"
     for tr in soup.find_all("tr"):
         tr_text = tr.get_text()
-        if "구주주" in tr_text and not sub_start_date:
+        if "구주주" in tr_text:
             dates = re.findall(d_regex, tr_text)
             if dates:
-                sub_start_date = to_standard_date(dates[0])
-                if len(dates) > 1:
+                if not sub_start_date:
+                    sub_start_date = to_standard_date(dates[0])
+                if len(dates) > 1 and not sub_end_date:
                     sub_end_date = to_standard_date(dates[1])
                 break
 
+    if not sub_start_date or not sub_end_date:
+        p_sub_range = (
+            r"(?:구주주|청약)[^\d]{0,40}"
+            r"(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2}일?)"
+            r"\s*(?:~|-)\s*"
+            r"(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2}일?)"
+        )
+        m_range = re.search(p_sub_range, text)
+        if m_range:
+            if not sub_start_date:
+                sub_start_date = to_standard_date(m_range.group(1))
+            if not sub_end_date:
+                sub_end_date = to_standard_date(m_range.group(2))
+
     if not sub_start_date:
         sub_start_date = find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"])
-        m_se = re.search(r"(?:구주주[^\d]{0,50})?종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[월\.\-]\s*\d{1,2})일?", text)
+    if not sub_end_date:
+        m_se = re.search(
+            r"(?:구주주[^\d]{0,50})?종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[월\.\-]\s*\d{1,2})일?",
+            text,
+        )
         if m_se:
             sub_end_date = to_standard_date(m_se.group(1))
 
