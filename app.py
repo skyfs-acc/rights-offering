@@ -85,23 +85,6 @@ def parse_offering_schedule_from_contents(html_content: str):
   soup = BeautifulSoup(html_content, "html.parser")
   text = soup.get_text()
 
-  def find_date(keywords):
-    for kw in keywords:
-      pattern = rf"{kw}[^\d]{{0,50}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
-      m = re.search(pattern, text)
-      if m:
-        raw = m.group(1)
-        cleaned = (
-            raw.replace("년", "-")
-            .replace("월", "-")
-            .replace("일", "")
-            .replace(".", "-")
-            .replace(" ", "")
-        )
-        parts = cleaned.split("-")
-        return f"{parts[0]}/{int(parts[1]):02d}/{int(parts[2]):02d}"
-    return ""
-
   def to_standard_date(raw_str):
     if not raw_str:
       return ""
@@ -113,12 +96,26 @@ def parse_offering_schedule_from_contents(html_content: str):
         .replace(" ", "")
     )
     p = c.split("-")
-    return f"{p[0]}/{int(p[1]):02d}/{int(p[2]):02d}"
+    if len(p) >= 3 and p[0].isdigit() and p[1].isdigit() and p[2].isdigit():
+      return f"{p[0]}/{int(p[1]):02d}/{int(p[2]):02d}"
+    return ""
 
+  def find_date(keywords):
+    for kw in keywords:
+      pattern = rf"{kw}[^\d]{{0,50}}(\d{{4}}[\.\-년]\s*\d{{1,2}}[\.\-월]\s*\d{{1,2}})"
+      m = re.search(pattern, text)
+      if m:
+        return to_standard_date(m.group(1))
+    return ""
+
+  # ------------------------------------------
   # 1. 신주배정기준일
+  # ------------------------------------------
   record_date = find_date(["신주배정기준일", "배정기준일"])
 
+  # ------------------------------------------
   # 2. 권리락일 (기준일 직전 1영업일)
+  # ------------------------------------------
   ex_rights_date = ""
   if record_date:
     try:
@@ -130,7 +127,9 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       pass
 
+  # ------------------------------------------
   # 3. 신주 발행가액 추출
+  # ------------------------------------------
   issue_price = ""
   m_confirm = re.search(
       r"확정발행가[^\d]{0,40}보통주식[^\d]{0,30}([\d,]+)\s*(?:원)?", text
@@ -158,7 +157,9 @@ def parse_offering_schedule_from_contents(html_content: str):
       if val.isdigit() and int(val) > 0:
         issue_price = f"{int(val):,}"
 
+  # ------------------------------------------
   # 4. 1주당 신주배정주식수
+  # ------------------------------------------
   applied_ratio = ""
   ratio_match = re.search(
       r"(?:1주당\s*신주배정주식수|1주당\s*신주배정비율|신주배정비율)[^\d]{0,30}(\d+\.\d+)",
@@ -173,7 +174,9 @@ def parse_offering_schedule_from_contents(html_content: str):
     except Exception:
       applied_ratio = ratio_match.group(1)
 
+  # ------------------------------------------
   # 5. 신주인수권 상장기간 (시작일 ~ 종료일)
+  # ------------------------------------------
   rights_start = ""
   rights_end = ""
   rights_period_match = re.search(
@@ -198,30 +201,47 @@ def parse_offering_schedule_from_contents(html_content: str):
         "신주인수권상장일",
     ])
 
+  # ------------------------------------------
   # 6. 구주주 청약일정
+  # ------------------------------------------
   sub_start_date = ""
   sub_end_date = ""
 
-  m_sub_pair = re.search(
-      r"구주주[^\d]{0,40}시작일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?[^\d]{0,40}종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?",
-      text,
-  )
-  if m_sub_pair:
-    sub_start_date = to_standard_date(m_sub_pair.group(1))
-    sub_end_date = to_standard_date(m_sub_pair.group(2))
-  else:
-    sub_start_date = find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"])
-    m_sub_end = re.search(
-        r"(?:구주주[^\d]{0,50})?종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[월\.\-]\s*\d{1,2})일?",
+  # 표(table) 내부에서 구주주 청약일 행 우선 탐색
+  for tr in soup.find_all("tr"):
+    tr_text = tr.get_text()
+    if "구주주" in tr_text and not sub_start_date:
+      dates = re.findall(r"(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})", tr_text)
+      if dates:
+        sub_start_date = to_standard_date(dates[0])
+        if len(dates) > 1:
+          sub_end_date = to_standard_date(dates[1])
+
+  if not sub_start_date:
+    m_sub_pair = re.search(
+        r"구주주[^\d]{0,40}시작일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?[^\d]{0,40}종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?",
         text,
     )
-    if m_sub_end:
-      sub_end_date = to_standard_date(m_sub_end.group(1))
+    if m_sub_pair:
+      sub_start_date = to_standard_date(m_sub_pair.group(1))
+      sub_end_date = to_standard_date(m_sub_pair.group(2))
+    else:
+      sub_start_date = find_date(["구주주청약일", "구주주청약", "청약예정일", "청약일"])
+      m_sub_end = re.search(
+          r"(?:구주주[^\d]{0,50})?종료일[^\d]{0,20}(\d{4}[\.\-년]\s*\d{1,2}[월\.\-]\s*\d{1,2})일?",
+          text,
+      )
+      if m_sub_end:
+        sub_end_date = to_standard_date(m_sub_end.group(1))
 
+  # ------------------------------------------
   # 7. 12. 납입일
+  # ------------------------------------------
   pay_date = find_date(["12. 납입일", "12.납입일", "주금납입일", "납입일"])
 
+  # ------------------------------------------
   # 8. 14. 신주의 배당기산일
+  # ------------------------------------------
   div_start_date = find_date([
       "14. 신주의 배당기산일",
       "14.신주의 배당기산일",
@@ -229,7 +249,9 @@ def parse_offering_schedule_from_contents(html_content: str):
       "배당기산일",
   ])
 
+  # ------------------------------------------
   # 9. 16. 신주의 상장예정일 (주식유통일)
+  # ------------------------------------------
   listing_date = find_date([
       "16. 신주의 상장예정일",
       "16.신주의 상장예정일",
@@ -239,14 +261,39 @@ def parse_offering_schedule_from_contents(html_content: str):
       "신주의 상장",
   ])
 
-  # 10. 실권주 청약 시작일
+  # ------------------------------------------
+  # 10. 실권주 청약일 (일반공모청약일) - 1순위: 표 탐색, 2순위: 텍스트 탐색
+  # ------------------------------------------
   forfeit_date = ""
-  m_forfeit_a = re.search(
-      r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:과|와|,)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*양일간",
-      text,
-  )
-  if m_forfeit_a:
-    forfeit_date = to_standard_date(m_forfeit_a.group(1))
+
+  # [1순위] 청약사무취급처 및 청약기간 표(table) 내부 tr 행별 우선 매칭
+  for tr in soup.find_all("tr"):
+    tr_text = tr.get_text()
+    # Case 1: "일반공모청약", Case 2: "실권주 일반공모청약" 또는 "실권주일반공모청약"
+    if ("일반공모청약" in tr_text or "실권주" in tr_text) and "구주주" not in tr_text:
+      # 해당 tr에서 날짜 패턴 검색
+      dates = re.findall(r"(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})", tr_text)
+      if dates:
+        forfeit_date = to_standard_date(dates[0])
+        break
+
+  # [2순위] 표에서 못 찾았을 경우 텍스트 기반 정규식 폴백
+  if not forfeit_date:
+    # 2026년 06월 23일~ 2026년 06월 24일 또는 양일간 패턴
+    m_forfeit_range = re.search(
+        r"(?:실권주\s*일반공모청약|실권주\s*청약|일반공모청약)[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:~|-|과|와|,|부터)",
+        text,
+    )
+    if m_forfeit_range:
+      forfeit_date = to_standard_date(m_forfeit_range.group(1))
+
+  if not forfeit_date:
+    m_forfeit_a = re.search(
+        r"실권주[^\d]{0,80}(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*(?:과|와|,)\s*(\d{4}[\.\-년]\s*\d{1,2}[\.\-월]\s*\d{1,2})일?\s*양일간",
+        text,
+    )
+    if m_forfeit_a:
+      forfeit_date = to_standard_date(m_forfeit_a.group(1))
 
   if not forfeit_date:
     m_forfeit_b = re.search(
@@ -265,7 +312,7 @@ def parse_offering_schedule_from_contents(html_content: str):
       forfeit_date = to_standard_date(m_forfeit_c.group(1))
 
   if not forfeit_date:
-    forfeit_date = find_date(["실권주청약일", "일반공모청약일"])
+    forfeit_date = find_date(["실권주청약일", "일반공모청약일", "실권주일반공모청약일"])
 
   return {
       "record_date": record_date,
