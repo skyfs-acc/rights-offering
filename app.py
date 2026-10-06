@@ -336,6 +336,7 @@ with tab_system:
             r3_1, r3_2 = st.columns(2)
             with r3_1:
                 st.text_input("권리락일", value=data.get("ex_rights_date", ""))
+                st.caption("⚠️ 임시공휴일/휴장일에 따라 권리락일이 달라질 수 있으니 재확인이 필요합니다.")
                 st.text_input("발행가", value=data.get("issue_price", ""))
             with r3_2:
                 st.text_input("배정기준일", value=data.get("record_date", ""))
