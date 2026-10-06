@@ -333,13 +333,26 @@ with tab_system:
 
             st.write("---")
 
-            r3_1, r3_2 = st.columns(2)
-            with r3_1:
+            # 1행: 권리락일 / 배정기준일
+            r3_top1, r3_top2 = st.columns(2)
+            with r3_top1:
                 st.text_input("권리락일", value=data.get("ex_rights_date", ""))
-                st.caption("⚠️ 임시공휴일/휴장일에 따라 권리락일이 달라질 수 있으니 재확인이 필요합니다.")
-                st.text_input("발행가", value=data.get("issue_price", ""))
-            with r3_2:
+            with r3_top2:
                 st.text_input("배정기준일", value=data.get("record_date", ""))
+
+            # 빨간색 콤팩트 주석 
+            st.markdown(
+                '<div style="color: #ff4b4b; font-size: 11px; margin-top: -12px; margin-bottom: 8px;">'
+                '⚠️ 임시공휴일/휴장일에 따라 권리락일이 변동될 수 있으니 재확인이 필요합니다.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            # 2행: 발행가 / 적용비율 (좌우 높이 일치)
+            r3_bot1, r3_bot2 = st.columns(2)
+            with r3_bot1:
+                st.text_input("발행가", value=data.get("issue_price", ""))
+            with r3_bot2:
                 st.text_input("적용비율", value=data.get("applied_ratio", ""))
 
             st.write("---")
